@@ -1320,7 +1320,7 @@ def main():
     cli = CLIView(verbose=args.verbose, quiet=args.quiet, dry_run=args.dry_run)
     
     # Handle query mode (if --query-db is specified)
-    if args.query_db or args.list_recurring or args.spending_report or args.top_categories or args.top_merchants or args.debt_payoff or args.show_debts or args.show_bills or args.upcoming_bills or args.show_investments or args.show_holdings or args.show_income or args.income_trends or args.validate_data or args.check_duplicates or args.tax_summary is not None or args.tax_deductions is not None or args.export_tax_report or args.set_budget or args.budget_status is not None or args.budget_report:
+    if args.query_db or args.list_recurring or args.spending_report or args.top_categories or args.top_merchants or args.debt_payoff or args.show_debts or args.show_bills or args.upcoming_bills or args.show_investments or args.show_holdings or args.show_income or args.income_trends or args.validate_data or args.check_duplicates or args.tax_summary is not None or args.tax_deductions is not None or args.export_tax_report or args.set_budget or args.budget_status is not None or args.budget_report or args.set_goal or args.show_goals or args.goal_progress is not None or args.cash_flow_forecast is not None or args.project_cash_flow is not None:
         handle_query_mode(args, cli)
         sys.exit(0)
     

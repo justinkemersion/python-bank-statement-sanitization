@@ -321,6 +321,27 @@ class DatabaseExporter:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_budget_month_year ON budgets(year, month)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_budget_active ON budgets(is_active)")
         
+        # Financial goals table - track financial goals and progress
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS financial_goals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                goal_name TEXT NOT NULL,
+                goal_type TEXT NOT NULL,
+                target_amount REAL NOT NULL,
+                current_amount REAL DEFAULT 0,
+                target_date TEXT,
+                start_date TEXT,
+                description TEXT,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_goal_type ON financial_goals(goal_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_goal_active ON financial_goals(is_active)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_goal_target_date ON financial_goals(target_date)")
+        
         self.conn.commit()
     
     def _detect_bank_name(self, text: str, source_file: str) -> Optional[str]:
