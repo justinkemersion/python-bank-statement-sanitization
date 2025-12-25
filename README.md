@@ -20,17 +20,31 @@ This project aims to develop a robust Python application for sanitizing sensitiv
 - **Recurring Transaction Detection:** Automatically identify subscriptions and recurring bills based on patterns.
 - **SQLite Database Export:** Export sanitized transactions to a SQLite database for analysis and tax preparation.
 - **Date Range Filtering:** Filter transactions by date range when exporting or querying.
+- **Bank/Issuer Tracking:** Automatically detects and tracks bank/issuer names (Discover, American Express, Charles Schwab, etc.) for multi-bank analysis.
+- **Account Type Detection:** Identifies account types (checking, savings, credit_card) for better organization.
+
+### Financial Management Features
+- **Account Balance Tracking:** Extracts and tracks account balances over time from statements, including credit limits, available credit, and APR.
+- **Debt Payoff Calculator:** Calculate optimal debt payoff strategies (snowball vs avalanche) with interest calculations and payoff timelines.
+- **Bill Detection & Reminders:** Automatically detects recurring bills, tracks due dates, and shows upcoming payments.
+- **Payment Due Date Tracking:** Extracts payment due dates from credit card statements to avoid late fees.
+
+### Income Tracking
+- **Paystub Support:** Extract structured data from paystubs including gross pay, net pay, deductions, and year-to-date totals.
+- **Multiple Paystubs per PDF:** Handles PDFs containing multiple paystubs, extracting each individually.
+- **Income Analytics:** Compare income vs spending, calculate savings rate, and track income trends.
 
 ### Query & Export
-- **Database Query Interface:** Query transactions by category, merchant, amount range, date range, and recurring status.
+- **Database Query Interface:** Query transactions by category, merchant, bank, account type, amount range, date range, and recurring status.
 - **Multiple Export Formats:** Export to CSV (for NotebookLM/AI tools), JSON (for programmatic access), or summary reports.
-- **Incremental Import:** Add new statements to existing database without duplicates.
+- **Incremental Import:** Add new statements to existing database without duplicates (both file-level and transaction-level duplicate prevention).
+- **Spending Analytics:** Generate comprehensive spending reports with monthly trends, category breakdowns, and top merchants.
 
 ## Architecture
 
 The application is designed with modularity in mind, following a Model-View-Controller (MVC) pattern:
 
-- **Model:** Handles the core logic of reading, parsing, and sanitizing bank statement data. Includes modules for different file types (`pdf_handler.py`, `txt_handler.py`, `csv_handler.py`, `excel_handler.py`), sanitization (`sanitizer.py`), categorization (`transaction_categorizer.py`), merchant extraction (`merchant_extractor.py`), and database operations (`database_exporter.py`, `spending_analytics.py`).
+- **Model:** Handles the core logic of reading, parsing, and sanitizing bank statement data. Includes modules for different file types (`pdf_handler.py`, `txt_handler.py`, `csv_handler.py`, `excel_handler.py`), sanitization (`sanitizer.py`), categorization (`transaction_categorizer.py`), merchant extraction (`merchant_extractor.py`), paystub extraction (`paystub_extractor.py`), balance extraction (`balance_extractor.py`), debt calculation (`debt_calculator.py`), and database operations (`database_exporter.py`, `spending_analytics.py`).
 - **View:** Manages command-line interface presentation (`cli.py`) with colored output, progress bars, and formatted messages.
 - **Controller:** Orchestrates the overall flow through the main entry point (`sanitize.py`), including CLI argument parsing, file discovery, and workflow management.
 
@@ -177,6 +191,15 @@ python sanitize.py ./statements --dry-run
 - `--top-merchants <N>`: Show top N merchants by spending
 - `--year <YYYY>`: Filter spending reports by specific year
 
+**Debt Management Options:**
+- `--show-debts`: Show current debt balances across all credit cards
+- `--debt-payoff <amount>`: Calculate debt payoff strategy with specified monthly payment
+- `--payoff-strategy <snowball|avalanche|compare>`: Choose payoff strategy (default: compare)
+
+**Bill Management Options:**
+- `--show-bills`: Show all recurring bills detected from transactions
+- `--upcoming-bills [days]`: Show bills due in next N days (default: 30 days)
+
 **Examples:**
 
 **Basic Sanitization:**
@@ -239,7 +262,38 @@ python sanitize.py --query-db finances.db --top-merchants 20
 python sanitize.py --query-db finances.db --spending-report report.txt --year 2024
 ```
 
+**Debt Management:**
+```bash
+# Show current debt balances
+python sanitize.py --query-db finances.db --show-debts
+
+# Calculate debt payoff strategy (compare both methods)
+python sanitize.py --query-db finances.db --debt-payoff 500 --payoff-strategy compare
+
+# Calculate snowball strategy only
+python sanitize.py --query-db finances.db --debt-payoff 500 --payoff-strategy snowball
+
+# Calculate avalanche strategy only
+python sanitize.py --query-db finances.db --debt-payoff 500 --payoff-strategy avalanche
+```
+
+**Bill Management:**
+```bash
+# Show all recurring bills
+python sanitize.py --query-db finances.db --show-bills
+
+# Show bills due in next 14 days
+python sanitize.py --query-db finances.db --upcoming-bills 14
+
+# Show bills due in next 30 days (default)
+python sanitize.py --query-db finances.db --upcoming-bills
+```
+
 **Note:** The old `src/main.py` entry point still works but is deprecated. Use `sanitize.py` for the enhanced CLI experience.
+
+## Quick Start for NotebookLM
+
+**Want to quickly sanitize your bank data and upload to NotebookLM?** See the [NotebookLM Quick Start Guide](#notebooklm-quick-start) below for a streamlined workflow.
 
 ### Development
 
@@ -249,3 +303,142 @@ To deactivate the virtual environment when you're done:
 ```bash
 deactivate
 ```
+
+## NotebookLM Quick Start
+
+**Get your financial data ready for NotebookLM in 3 simple steps!**
+
+### Step 1: Collect Your Statements
+
+Download your bank statements (PDF, CSV, or Excel) from:
+- Credit cards (Discover, American Express, etc.)
+- Checking accounts (Charles Schwab, etc.)
+- Any other financial accounts
+
+Organize them in a directory:
+```bash
+mkdir ~/financial_data_2024
+# Download all your statements here
+```
+
+### Step 2: Sanitize and Export (One Command!)
+
+Run this single command to sanitize, organize, and export everything:
+```bash
+python sanitize.py ~/financial_data_2024 \
+  --export-db ~/finances_2024.db \
+  --export-csv ~/finances_2024.csv
+```
+
+**What this does:**
+- ✅ Sanitizes all files (removes sensitive data like account numbers, SSN, etc.)
+- ✅ Extracts transactions, balances, and paystubs
+- ✅ Organizes by bank/issuer (Discover, AMEX, Charles Schwab, etc.)
+- ✅ Categorizes transactions automatically
+- ✅ Detects recurring bills and subscriptions
+- ✅ Creates a CSV file ready for NotebookLM
+
+### Step 3: Upload to NotebookLM
+
+1. Go to [NotebookLM](https://notebooklm.google.com)
+2. Create a new notebook
+3. Upload the CSV file (`finances_2024.csv`)
+4. Start asking questions!
+
+### What Data Gets Exported?
+
+The CSV includes everything NotebookLM needs:
+- **Transactions:** Date, amount, merchant, category, bank name
+- **Account Information:** Account type (checking/credit_card), bank name
+- **Balances:** Account balances over time (if extracted)
+- **Metadata:** Explains what was sanitized and how to interpret the data
+
+### Example NotebookLM Prompts
+
+Once uploaded, try these prompts:
+
+**Spending Analysis:**
+- "What are my top 10 spending categories this year?"
+- "Show me all spending on my Discover card"
+- "Compare my spending between credit cards and checking account"
+- "What's my average monthly spending on restaurants?"
+
+**Debt Management:**
+- "What's my total debt across all credit cards?"
+- "How should I prioritize paying off Discover vs American Express?"
+- "Calculate my debt payoff timeline if I pay $500/month"
+- "Which credit card has the highest balance?"
+
+**Bill Management:**
+- "What bills are due this month?"
+- "Show me all my recurring subscriptions"
+- "What's my total monthly bill obligations?"
+
+**Income & Budget:**
+- "What's my total income this year?"
+- "Compare my income vs expenses"
+- "What's my savings rate?"
+- "Help me create a budget based on my actual spending"
+
+**Merchant Analysis:**
+- "Where am I spending too much money?"
+- "Show me all Amazon purchases this year"
+- "Which merchants appear on multiple credit cards?"
+
+**Tax Preparation:**
+- "Identify all tax-deductible expenses"
+- "What were my total business expenses?"
+- "Categorize expenses for tax filing"
+
+### Pro Tips for NotebookLM
+
+1. **Start Broad, Then Narrow:** Begin with overview questions, then drill down
+2. **Use Bank Names:** Reference specific banks ("Show me Discover spending") for better results
+3. **Ask for Comparisons:** "Compare X vs Y" questions work great
+4. **Request Action Plans:** Ask for strategies ("How should I pay off debt?")
+5. **Export Insights:** Ask NotebookLM to summarize key findings
+
+### Incremental Updates
+
+Add new statements throughout the year:
+```bash
+# Add January statement
+python sanitize.py jan_statement.pdf --export-db ~/finances_2024.db
+
+# Add February statement
+python sanitize.py feb_statement.pdf --export-db ~/finances_2024.db
+
+# ... continue each month
+
+# At year end, export everything to CSV
+python sanitize.py . --export-db ~/finances_2024.db --export-csv ~/finances_2024.csv
+```
+
+The database automatically prevents duplicates, so you can safely re-import or add overlapping statements.
+
+### Multi-Bank Workflow
+
+If you have statements from multiple banks (Discover, AMEX, Charles Schwab, etc.):
+
+```bash
+# Process all statements at once
+python sanitize.py ~/all_statements_2024 \
+  --export-db ~/finances_2024.db \
+  --export-csv ~/finances_2024.csv
+```
+
+The system automatically:
+- Detects which bank each statement is from
+- Separates transactions by bank/issuer
+- Tracks balances per bank
+- Enables bank-specific queries in NotebookLM
+
+### What Makes This Perfect for NotebookLM?
+
+1. **Structured Data:** CSV format with clear columns and metadata
+2. **Bank Separation:** Transactions tagged by bank for easy filtering
+3. **Rich Context:** Categories, merchants, and account types included
+4. **Safe:** All sensitive data removed before upload
+5. **Comprehensive:** Transactions, balances, bills, and income all in one file
+
+For more detailed NotebookLM workflow guidance, see [NOTEBOOKLM_WORKFLOW.md](NOTEBOOKLM_WORKFLOW.md).
