@@ -16,7 +16,10 @@ from src.controllers.file_processor import FileProcessor
 from src.models.sanitizer import Sanitizer
 from src.models.pdf_handler import PDFHandler
 from src.models.txt_handler import TXTHandler
+from src.models.csv_handler import CSVHandler
+from src.models.excel_handler import ExcelHandler
 from src.models.metadata import MetadataGenerator
+from src.models.database_exporter import DatabaseExporter
 from src.views.cli import CLIView, MessageLevel, Colors
 
 
@@ -78,6 +81,12 @@ Examples:
     )
     
     parser.add_argument(
+        "--export-db",
+        dest="export_db",
+        help="Export sanitized data to SQLite database for tax analysis (specify database file path)"
+    )
+    
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 1.0.0"
@@ -133,7 +142,7 @@ def ensure_output_directory(output_dir: str, cli: CLIView) -> bool:
     return True
 
 
-def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_metadata: bool = True):
+def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_metadata: bool = True, db_exporter: DatabaseExporter = None):
     """Sanitize a single file.
     
     Args:
@@ -145,6 +154,8 @@ def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_
     sanitizer = Sanitizer()
     pdf_handler = PDFHandler()
     txt_handler = TXTHandler()
+    csv_handler = CSVHandler()
+    excel_handler = ExcelHandler()
     metadata_gen = MetadataGenerator(include_metadata=include_metadata)
     
     base_name, ext = os.path.splitext(file_path)
@@ -152,6 +163,11 @@ def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_
     sanitized_file_path = os.path.join(output_dir, sanitized_filename)
     
     cli.print_file_info(file_path, "Processing")
+    
+    # Variables for database export
+    sanitized_text = None
+    sanitized_rows = None
+    sanitized_df = None
     
     try:
         if ext.lower() == '.pdf':
@@ -199,6 +215,58 @@ def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_
                 cli.print("  Saving sanitized file...", MessageLevel.DEBUG)
             success = txt_handler.save_sanitized_text(sanitized_text, sanitized_file_path, 
                                                      metadata_header, metadata_footer)
+            # Store for database export
+            sanitized_text = sanitized_text
+        
+        elif ext.lower() == '.csv':
+            if cli.verbose:
+                cli.print("  Reading CSV file...", MessageLevel.DEBUG)
+            rows = csv_handler.read_csv(file_path)
+            if rows is None:
+                cli.print(f"  Failed to read CSV file", MessageLevel.ERROR)
+                cli.files_failed += 1
+                return
+            
+            if cli.verbose:
+                cli.print(f"  Read {len(rows)} rows", MessageLevel.DEBUG)
+                cli.print("  Sanitizing content...", MessageLevel.DEBUG)
+            sanitized_rows, detected_patterns = csv_handler.sanitize_csv_data(rows, sanitizer)
+            
+            # Generate metadata
+            metadata_header = metadata_gen.generate_header(detected_patterns)
+            metadata_footer = metadata_gen.generate_footer()
+            
+            if cli.verbose:
+                cli.print("  Saving sanitized CSV...", MessageLevel.DEBUG)
+            success = csv_handler.save_sanitized_csv(sanitized_rows, sanitized_file_path,
+                                                    metadata_header, metadata_footer)
+            # Store for database export
+            sanitized_rows = sanitized_rows
+        
+        elif ext.lower() in ['.xlsx', '.xls']:
+            if cli.verbose:
+                cli.print("  Reading Excel file...", MessageLevel.DEBUG)
+            df = excel_handler.read_excel(file_path)
+            if df is None:
+                cli.print(f"  Failed to read Excel file", MessageLevel.ERROR)
+                cli.files_failed += 1
+                return
+            
+            if cli.verbose:
+                cli.print(f"  Read {len(df)} rows, {len(df.columns)} columns", MessageLevel.DEBUG)
+                cli.print("  Sanitizing content...", MessageLevel.DEBUG)
+            sanitized_df, detected_patterns = excel_handler.sanitize_excel_data(df, sanitizer)
+            
+            # Generate metadata
+            metadata_header = metadata_gen.generate_header(detected_patterns)
+            metadata_footer = metadata_gen.generate_footer()
+            
+            if cli.verbose:
+                cli.print("  Saving sanitized Excel...", MessageLevel.DEBUG)
+            success = excel_handler.save_sanitized_excel(sanitized_df, sanitized_file_path,
+                                                        metadata_header, metadata_footer)
+            # Store for database export
+            sanitized_df = sanitized_df
         else:
             cli.print(f"  Unsupported file type: {ext}", MessageLevel.WARNING)
             cli.files_skipped += 1
@@ -207,6 +275,27 @@ def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_
         if success:
             cli.print(f"  ✓ Successfully sanitized: {sanitized_filename}", MessageLevel.SUCCESS)
             cli.files_processed += 1
+            
+            # Export to database if requested
+            if db_exporter:
+                try:
+                    if ext.lower() == '.csv':
+                        transactions = db_exporter.extract_transactions_from_csv(sanitized_rows, os.path.basename(file_path))
+                    elif ext.lower() in ['.xlsx', '.xls']:
+                        transactions = db_exporter.extract_transactions_from_dataframe(sanitized_df, os.path.basename(file_path))
+                    elif ext.lower() in ['.pdf', '.txt']:
+                        transactions = db_exporter.extract_transactions_from_text(sanitized_text, os.path.basename(file_path))
+                    else:
+                        transactions = []
+                    
+                    if transactions:
+                        db_exporter.insert_transactions(transactions)
+                        db_exporter.record_file_import(file_path, ext.lower()[1:], len(transactions))
+                        if cli.verbose:
+                            cli.print(f"  Exported {len(transactions)} transactions to database", MessageLevel.DEBUG)
+                except Exception as e:
+                    if cli.verbose:
+                        cli.print(f"  Warning: Failed to export to database: {e}", MessageLevel.WARNING)
         else:
             cli.print(f"  ✗ Failed to save sanitized file", MessageLevel.ERROR)
             cli.files_failed += 1
@@ -219,7 +308,7 @@ def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_
         cli.files_failed += 1
 
 
-def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metadata: bool = True):
+def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metadata: bool = True, db_exporter: DatabaseExporter = None):
     """Main sanitization workflow.
     
     Args:
@@ -233,6 +322,8 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metada
     sanitizer = Sanitizer()
     pdf_handler = PDFHandler()
     txt_handler = TXTHandler()
+    csv_handler = CSVHandler()
+    excel_handler = ExcelHandler()
     metadata_gen = MetadataGenerator(include_metadata=include_metadata)
     
     # Find files to process
@@ -268,6 +359,11 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metada
         
         success = False
         
+        # Variables for database export
+        sanitized_text = None
+        sanitized_rows = None
+        sanitized_df = None
+        
         try:
             if ext.lower() == '.pdf':
                 if cli.verbose:
@@ -291,6 +387,8 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metada
                     cli.print("  Creating sanitized PDF...", MessageLevel.DEBUG)
                 success = pdf_handler.create_sanitized_pdf(file_path, sanitized_text, sanitized_file_path,
                                                           metadata_header, metadata_footer)
+                # Store for database export
+                sanitized_text = sanitized_text
                 
             elif ext.lower() == '.txt':
                 if cli.verbose:
@@ -314,6 +412,58 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metada
                     cli.print("  Saving sanitized file...", MessageLevel.DEBUG)
                 success = txt_handler.save_sanitized_text(sanitized_text, sanitized_file_path, 
                                                          metadata_header, metadata_footer)
+                # Store for database export
+                sanitized_text = sanitized_text
+            
+            elif ext.lower() == '.csv':
+                if cli.verbose:
+                    cli.print("  Reading CSV file...", MessageLevel.DEBUG)
+                rows = csv_handler.read_csv(file_path)
+                if rows is None:
+                    cli.print(f"  Failed to read CSV file", MessageLevel.ERROR)
+                    cli.files_failed += 1
+                    continue
+                
+                if cli.verbose:
+                    cli.print(f"  Read {len(rows)} rows", MessageLevel.DEBUG)
+                    cli.print("  Sanitizing content...", MessageLevel.DEBUG)
+                sanitized_rows, detected_patterns = csv_handler.sanitize_csv_data(rows, sanitizer)
+                
+                # Generate metadata
+                metadata_header = metadata_gen.generate_header(detected_patterns)
+                metadata_footer = metadata_gen.generate_footer()
+                
+                if cli.verbose:
+                    cli.print("  Saving sanitized CSV...", MessageLevel.DEBUG)
+                success = csv_handler.save_sanitized_csv(sanitized_rows, sanitized_file_path,
+                                                        metadata_header, metadata_footer)
+                # Store for database export
+                sanitized_rows = sanitized_rows
+            
+            elif ext.lower() in ['.xlsx', '.xls']:
+                if cli.verbose:
+                    cli.print("  Reading Excel file...", MessageLevel.DEBUG)
+                df = excel_handler.read_excel(file_path)
+                if df is None:
+                    cli.print(f"  Failed to read Excel file", MessageLevel.ERROR)
+                    cli.files_failed += 1
+                    continue
+                
+                if cli.verbose:
+                    cli.print(f"  Read {len(df)} rows, {len(df.columns)} columns", MessageLevel.DEBUG)
+                    cli.print("  Sanitizing content...", MessageLevel.DEBUG)
+                sanitized_df, detected_patterns = excel_handler.sanitize_excel_data(df, sanitizer)
+                
+                # Generate metadata
+                metadata_header = metadata_gen.generate_header(detected_patterns)
+                metadata_footer = metadata_gen.generate_footer()
+                
+                if cli.verbose:
+                    cli.print("  Saving sanitized Excel...", MessageLevel.DEBUG)
+                success = excel_handler.save_sanitized_excel(sanitized_df, sanitized_file_path,
+                                                            metadata_header, metadata_footer)
+                # Store for database export
+                sanitized_df = sanitized_df
             else:
                 cli.print(f"  Unsupported file type: {ext}", MessageLevel.WARNING)
                 cli.files_skipped += 1
@@ -322,6 +472,27 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metada
             if success:
                 cli.print(f"  ✓ Successfully sanitized: {sanitized_filename}", MessageLevel.SUCCESS)
                 cli.files_processed += 1
+                
+                # Export to database if requested
+                if db_exporter:
+                    try:
+                        if ext.lower() == '.csv':
+                            transactions = db_exporter.extract_transactions_from_csv(sanitized_rows, os.path.basename(file_path))
+                        elif ext.lower() in ['.xlsx', '.xls']:
+                            transactions = db_exporter.extract_transactions_from_dataframe(sanitized_df, os.path.basename(file_path))
+                        elif ext.lower() in ['.pdf', '.txt']:
+                            transactions = db_exporter.extract_transactions_from_text(sanitized_text, os.path.basename(file_path))
+                        else:
+                            transactions = []
+                        
+                        if transactions:
+                            db_exporter.insert_transactions(transactions)
+                            db_exporter.record_file_import(file_path, ext.lower()[1:], len(transactions))
+                            if cli.verbose:
+                                cli.print(f"  Exported {len(transactions)} transactions to database", MessageLevel.DEBUG)
+                    except Exception as e:
+                        if cli.verbose:
+                            cli.print(f"  Warning: Failed to export to database: {e}", MessageLevel.WARNING)
             else:
                 cli.print(f"  ✗ Failed to save sanitized file", MessageLevel.ERROR)
                 cli.files_failed += 1
@@ -391,14 +562,38 @@ def main():
             print(f"  {label_text} {value_text}")
         print()
     
+    # Initialize database exporter if requested
+    db_exporter = None
+    if args.export_db:
+        db_path = os.path.abspath(args.export_db)
+        db_exporter = DatabaseExporter(db_path)
+        if db_exporter.connect():
+            db_exporter.create_schema()
+            cli.print(f"Database export enabled: {db_path}", MessageLevel.INFO)
+        else:
+            cli.print(f"Failed to initialize database. Continuing without database export.", MessageLevel.WARNING)
+            db_exporter = None
+    
     # Run sanitization
     try:
         if is_file:
             cli.print_header("Processing File")
-            sanitize_single_file(input_path, output_directory, cli, include_metadata=include_metadata)
+            sanitize_single_file(input_path, output_directory, cli, include_metadata=include_metadata, db_exporter=db_exporter)
         else:
-            sanitize_files(input_path, output_directory, cli, include_metadata=include_metadata)
+            sanitize_files(input_path, output_directory, cli, include_metadata=include_metadata, db_exporter=db_exporter)
         cli.print_summary()
+        
+        # Show database statistics if export was used
+        if db_exporter:
+            stats = db_exporter.get_statistics()
+            cli.print_header("Database Statistics")
+            cli.print(f"Total Transactions: {stats['total_transactions']}", MessageLevel.INFO)
+            cli.print(f"Files Imported: {stats['files_imported']}", MessageLevel.INFO)
+            if stats['date_range']['min']:
+                cli.print(f"Date Range: {stats['date_range']['min']} to {stats['date_range']['max']}", MessageLevel.INFO)
+            if stats['total_amount']:
+                cli.print(f"Total Amount: ${stats['total_amount']:,.2f}", MessageLevel.INFO)
+            db_exporter.close()
         
         # Exit with appropriate code
         if cli.files_failed > 0:

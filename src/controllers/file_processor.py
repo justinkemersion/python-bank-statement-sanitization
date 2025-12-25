@@ -2,7 +2,7 @@ import os
 
 class FileProcessor:
     # Supported file extensions
-    SUPPORTED_EXTENSIONS = {'.pdf', '.txt'}
+    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.csv', '.xlsx', '.xls'}
     
     def __init__(self, input_dir, output_dir):
         self.input_dir = input_dir
