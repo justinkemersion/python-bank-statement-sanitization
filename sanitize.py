@@ -87,6 +87,12 @@ Examples:
     )
     
     parser.add_argument(
+        "--force-reimport",
+        action="store_true",
+        help="Force re-import of files that have already been imported to the database"
+    )
+    
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 1.0.0"
@@ -142,7 +148,7 @@ def ensure_output_directory(output_dir: str, cli: CLIView) -> bool:
     return True
 
 
-def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_metadata: bool = True, db_exporter: DatabaseExporter = None):
+def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_metadata: bool = True, db_exporter: DatabaseExporter = None, force_reimport: bool = False):
     """Sanitize a single file.
     
     Args:
@@ -279,20 +285,31 @@ def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_
             # Export to database if requested
             if db_exporter:
                 try:
-                    if ext.lower() == '.csv':
-                        transactions = db_exporter.extract_transactions_from_csv(sanitized_rows, os.path.basename(file_path))
-                    elif ext.lower() in ['.xlsx', '.xls']:
-                        transactions = db_exporter.extract_transactions_from_dataframe(sanitized_df, os.path.basename(file_path))
-                    elif ext.lower() in ['.pdf', '.txt']:
-                        transactions = db_exporter.extract_transactions_from_text(sanitized_text, os.path.basename(file_path))
-                    else:
-                        transactions = []
-                    
-                    if transactions:
-                        db_exporter.insert_transactions(transactions)
-                        db_exporter.record_file_import(file_path, ext.lower()[1:], len(transactions))
+                    # Check if file already imported (unless force re-import)
+                    if not force_reimport and db_exporter.is_file_imported(file_path):
                         if cli.verbose:
-                            cli.print(f"  Exported {len(transactions)} transactions to database", MessageLevel.DEBUG)
+                            cli.print(f"  File already imported to database (use --force-reimport to re-import)", MessageLevel.DEBUG)
+                    else:
+                        # Delete existing transactions if re-importing
+                        if force_reimport and db_exporter.is_file_imported(file_path):
+                            deleted = db_exporter.delete_file_transactions(file_path)
+                            if cli.verbose:
+                                cli.print(f"  Removed {deleted} existing transactions for re-import", MessageLevel.DEBUG)
+                        
+                        if ext.lower() == '.csv':
+                            transactions = db_exporter.extract_transactions_from_csv(sanitized_rows, os.path.basename(file_path))
+                        elif ext.lower() in ['.xlsx', '.xls']:
+                            transactions = db_exporter.extract_transactions_from_dataframe(sanitized_df, os.path.basename(file_path))
+                        elif ext.lower() in ['.pdf', '.txt']:
+                            transactions = db_exporter.extract_transactions_from_text(sanitized_text, os.path.basename(file_path))
+                        else:
+                            transactions = []
+                        
+                        if transactions:
+                            db_exporter.insert_transactions(transactions)
+                            db_exporter.record_file_import(file_path, ext.lower()[1:], len(transactions))
+                            if cli.verbose:
+                                cli.print(f"  Exported {len(transactions)} transactions to database", MessageLevel.DEBUG)
                 except Exception as e:
                     if cli.verbose:
                         cli.print(f"  Warning: Failed to export to database: {e}", MessageLevel.WARNING)
@@ -308,7 +325,7 @@ def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_
         cli.files_failed += 1
 
 
-def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metadata: bool = True, db_exporter: DatabaseExporter = None):
+def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metadata: bool = True, db_exporter: DatabaseExporter = None, force_reimport: bool = False):
     """Main sanitization workflow.
     
     Args:
@@ -476,20 +493,31 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metada
                 # Export to database if requested
                 if db_exporter:
                     try:
-                        if ext.lower() == '.csv':
-                            transactions = db_exporter.extract_transactions_from_csv(sanitized_rows, os.path.basename(file_path))
-                        elif ext.lower() in ['.xlsx', '.xls']:
-                            transactions = db_exporter.extract_transactions_from_dataframe(sanitized_df, os.path.basename(file_path))
-                        elif ext.lower() in ['.pdf', '.txt']:
-                            transactions = db_exporter.extract_transactions_from_text(sanitized_text, os.path.basename(file_path))
-                        else:
-                            transactions = []
-                        
-                        if transactions:
-                            db_exporter.insert_transactions(transactions)
-                            db_exporter.record_file_import(file_path, ext.lower()[1:], len(transactions))
+                        # Check if file already imported (unless force re-import)
+                        if not force_reimport and db_exporter.is_file_imported(file_path):
                             if cli.verbose:
-                                cli.print(f"  Exported {len(transactions)} transactions to database", MessageLevel.DEBUG)
+                                cli.print(f"  File already imported to database (use --force-reimport to re-import)", MessageLevel.DEBUG)
+                        else:
+                            # Delete existing transactions if re-importing
+                            if force_reimport and db_exporter.is_file_imported(file_path):
+                                deleted = db_exporter.delete_file_transactions(file_path)
+                                if cli.verbose:
+                                    cli.print(f"  Removed {deleted} existing transactions for re-import", MessageLevel.DEBUG)
+                            
+                            if ext.lower() == '.csv':
+                                transactions = db_exporter.extract_transactions_from_csv(sanitized_rows, os.path.basename(file_path))
+                            elif ext.lower() in ['.xlsx', '.xls']:
+                                transactions = db_exporter.extract_transactions_from_dataframe(sanitized_df, os.path.basename(file_path))
+                            elif ext.lower() in ['.pdf', '.txt']:
+                                transactions = db_exporter.extract_transactions_from_text(sanitized_text, os.path.basename(file_path))
+                            else:
+                                transactions = []
+                            
+                            if transactions:
+                                db_exporter.insert_transactions(transactions)
+                                db_exporter.record_file_import(file_path, ext.lower()[1:], len(transactions))
+                                if cli.verbose:
+                                    cli.print(f"  Exported {len(transactions)} transactions to database", MessageLevel.DEBUG)
                     except Exception as e:
                         if cli.verbose:
                             cli.print(f"  Warning: Failed to export to database: {e}", MessageLevel.WARNING)
@@ -578,9 +606,9 @@ def main():
     try:
         if is_file:
             cli.print_header("Processing File")
-            sanitize_single_file(input_path, output_directory, cli, include_metadata=include_metadata, db_exporter=db_exporter)
+            sanitize_single_file(input_path, output_directory, cli, include_metadata=include_metadata, db_exporter=db_exporter, force_reimport=args.force_reimport)
         else:
-            sanitize_files(input_path, output_directory, cli, include_metadata=include_metadata, db_exporter=db_exporter)
+            sanitize_files(input_path, output_directory, cli, include_metadata=include_metadata, db_exporter=db_exporter, force_reimport=args.force_reimport)
         cli.print_summary()
         
         # Show database statistics if export was used

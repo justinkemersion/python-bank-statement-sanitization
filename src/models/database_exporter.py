@@ -250,6 +250,20 @@ class DatabaseExporter:
         
         self.conn.commit()
     
+    def is_file_imported(self, file_path: str) -> bool:
+        """Check if a file has already been imported.
+        
+        Args:
+            file_path: Path to the file to check
+            
+        Returns:
+            bool: True if file has been imported, False otherwise
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM imported_files WHERE file_path = ?", (file_path,))
+        count = cursor.fetchone()[0]
+        return count > 0
+    
     def record_file_import(self, file_path: str, file_type: str, row_count: int, notes: str = None):
         """Record that a file has been imported.
         
@@ -261,10 +275,25 @@ class DatabaseExporter:
         """
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT OR REPLACE INTO imported_files (file_path, file_type, row_count, notes)
-            VALUES (?, ?, ?, ?)
+            INSERT OR REPLACE INTO imported_files (file_path, file_type, row_count, notes, import_date)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
         """, (file_path, file_type, row_count, notes))
         self.conn.commit()
+    
+    def delete_file_transactions(self, file_path: str) -> int:
+        """Delete all transactions from a specific file (for re-import).
+        
+        Args:
+            file_path: Path to the file whose transactions should be deleted
+            
+        Returns:
+            int: Number of transactions deleted
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM transactions WHERE source_file = ?", (os.path.basename(file_path),))
+        deleted_count = cursor.rowcount
+        self.conn.commit()
+        return deleted_count
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get database statistics.
