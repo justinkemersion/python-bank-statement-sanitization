@@ -1,0 +1,5 @@
+This is a sample TXT file.
+My account number is 1234567890123456.
+My credit card number is 1111-2222-3333-4444.
+My SSN is 000-11-2222.
+Another account is 9876543210.
