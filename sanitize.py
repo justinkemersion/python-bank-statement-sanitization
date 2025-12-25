@@ -729,9 +729,22 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metada
                                 if cli.verbose:
                                     cli.print(f"  Removed {deleted} existing transactions for re-import", MessageLevel.DEBUG)
                             
-                            # Try to extract paystub data first (for PDF/TXT files)
-                            paystubs = []
+                            # Try to extract tax documents first (for PDF/TXT files)
+                            tax_doc = None
                             if ext.lower() in ['.pdf', '.txt']:
+                                tax_doc = db_exporter.extract_tax_document_from_text(sanitized_text, os.path.basename(file_path))
+                                if tax_doc:
+                                    doc_id = db_exporter.insert_tax_document(tax_doc, skip_duplicates=True)
+                                    if doc_id:
+                                        if cli.verbose:
+                                            doc_type = tax_doc.get('document_type', 'Unknown')
+                                            tax_year = tax_doc.get('tax_year', 'N/A')
+                                            cli.print(f"  Extracted tax document: {doc_type} ({tax_year})", MessageLevel.DEBUG)
+                                        db_exporter.record_file_import(file_path, 'tax_document', 1, f"Tax document: {tax_doc.get('document_type')}")
+                            
+                            # Try to extract paystub data (for PDF/TXT files, if not a tax document)
+                            paystubs = []
+                            if not tax_doc and ext.lower() in ['.pdf', '.txt']:
                                 paystubs = db_exporter.extract_paystub_from_text(sanitized_text, os.path.basename(file_path))
                                 if paystubs:
                                     inserted_count = 0
@@ -755,8 +768,8 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metada
                                         if cli.verbose:
                                             cli.print(f"  All {len(paystubs)} paystub(s) already exist in database", MessageLevel.DEBUG)
                             
-                            # Extract investment account data first (for statements, not paystubs)
-                            if not paystubs and ext.lower() in ['.pdf', '.txt']:
+                            # Extract investment account data (for statements, not paystubs or tax docs)
+                            if not paystubs and not tax_doc and ext.lower() in ['.pdf', '.txt']:
                                 # Detect account type and bank name first
                                 account_type = db_exporter._detect_account_type(sanitized_text, os.path.basename(file_path))
                                 bank_name = db_exporter._detect_bank_name(sanitized_text, os.path.basename(file_path))
