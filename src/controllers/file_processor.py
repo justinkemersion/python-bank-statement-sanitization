@@ -33,11 +33,10 @@ class FileProcessor:
                 if filename.endswith("-sanitized.pdf") or filename.endswith("-sanitized.txt"):
                     continue
 
-                # Check if a sanitized version (either PDF or TXT, regardless of original type) exists
-                sanitized_filename_pdf = f"{base_name}-sanitized.pdf"
-                sanitized_filename_txt = f"{base_name}-sanitized.txt"
-                if os.path.exists(os.path.join(self.output_dir, sanitized_filename_pdf)) or \
-                   os.path.exists(os.path.join(self.output_dir, sanitized_filename_txt)):
+                # Check if a sanitized version of the SAME file type exists
+                sanitized_filename = f"{base_name}-sanitized{ext_lower}"
+                sanitized_file_path = os.path.join(self.output_dir, sanitized_filename)
+                if os.path.exists(sanitized_file_path):
                     print(f"Skipping {filename}: Sanitized version already exists in output directory.")
                     continue
                 
