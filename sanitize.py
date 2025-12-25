@@ -15,6 +15,7 @@ from src.controllers.file_processor import FileProcessor
 from src.models.sanitizer import Sanitizer
 from src.models.pdf_handler import PDFHandler
 from src.models.txt_handler import TXTHandler
+from src.models.metadata import MetadataGenerator
 from src.views.cli import CLIView, MessageLevel
 
 
@@ -68,6 +69,12 @@ Examples:
     )
     
     parser.add_argument(
+        "--no-metadata",
+        action="store_true",
+        help="Disable AI-friendly metadata headers in sanitized files (metadata enabled by default)"
+    )
+    
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 1.0.0"
@@ -105,19 +112,21 @@ def validate_directories(input_dir: str, output_dir: str, cli: CLIView) -> bool:
     return True
 
 
-def sanitize_files(input_dir: str, output_dir: str, cli: CLIView):
+def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metadata: bool = True):
     """Main sanitization workflow.
     
     Args:
         input_dir: Directory containing files to sanitize
         output_dir: Directory to save sanitized files
         cli: CLI view instance for output
+        include_metadata: Whether to include AI-friendly metadata headers
     """
     # Initialize components
     file_processor = FileProcessor(input_dir, output_dir)
     sanitizer = Sanitizer()
     pdf_handler = PDFHandler()
     txt_handler = TXTHandler()
+    metadata_gen = MetadataGenerator(include_metadata=include_metadata)
     
     # Find files to process
     if cli.verbose:
@@ -165,11 +174,16 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView):
                 if cli.verbose:
                     cli.print(f"  Extracted {len(text_content)} characters", MessageLevel.DEBUG)
                     cli.print("  Sanitizing content...", MessageLevel.DEBUG)
-                sanitized_text = sanitizer.sanitize_text(text_content)
+                sanitized_text, detected_patterns = sanitizer.sanitize_text(text_content, track_patterns=True)
+                
+                # Generate metadata
+                metadata_header = metadata_gen.generate_header(detected_patterns)
+                metadata_footer = metadata_gen.generate_footer()
                 
                 if cli.verbose:
                     cli.print("  Creating sanitized PDF...", MessageLevel.DEBUG)
-                success = pdf_handler.create_sanitized_pdf(file_path, sanitized_text, sanitized_file_path)
+                success = pdf_handler.create_sanitized_pdf(file_path, sanitized_text, sanitized_file_path,
+                                                          metadata_header, metadata_footer)
                 
             elif ext.lower() == '.txt':
                 if cli.verbose:
@@ -183,11 +197,16 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView):
                 if cli.verbose:
                     cli.print(f"  Read {len(text_content)} characters", MessageLevel.DEBUG)
                     cli.print("  Sanitizing content...", MessageLevel.DEBUG)
-                sanitized_text = sanitizer.sanitize_text(text_content)
+                sanitized_text, detected_patterns = sanitizer.sanitize_text(text_content, track_patterns=True)
+                
+                # Generate metadata
+                metadata_header = metadata_gen.generate_header(detected_patterns)
+                metadata_footer = metadata_gen.generate_footer()
                 
                 if cli.verbose:
                     cli.print("  Saving sanitized file...", MessageLevel.DEBUG)
-                success = txt_handler.save_sanitized_text(sanitized_text, sanitized_file_path)
+                success = txt_handler.save_sanitized_text(sanitized_text, sanitized_file_path, 
+                                                         metadata_header, metadata_footer)
             else:
                 cli.print(f"  Unsupported file type: {ext}", MessageLevel.WARNING)
                 cli.files_skipped += 1
@@ -224,10 +243,15 @@ def main():
         sys.exit(1)
     
     # Print configuration
+    include_metadata = not args.no_metadata
     if not cli.quiet:
         cli.print_header("Bank Statement Sanitizer")
         cli.print(f"Input directory:  {input_directory}", MessageLevel.INFO)
         cli.print(f"Output directory: {output_directory}", MessageLevel.INFO)
+        if include_metadata:
+            cli.print(f"AI metadata:      Enabled (for AI tool compatibility)", MessageLevel.INFO)
+        else:
+            cli.print(f"AI metadata:      Disabled", MessageLevel.INFO)
         if cli.verbose:
             cli.print(f"Verbose mode:     Enabled", MessageLevel.DEBUG)
         if cli.dry_run:
@@ -235,7 +259,7 @@ def main():
     
     # Run sanitization
     try:
-        sanitize_files(input_directory, output_directory, cli)
+        sanitize_files(input_directory, output_directory, cli, include_metadata=include_metadata)
         cli.print_summary()
         
         # Exit with appropriate code

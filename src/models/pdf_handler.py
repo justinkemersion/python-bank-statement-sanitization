@@ -37,7 +37,7 @@ class PDFHandler:
             return None
         return text_content
 
-    def create_sanitized_pdf(self, original_pdf_path, sanitized_text, output_path):
+    def create_sanitized_pdf(self, original_pdf_path, sanitized_text, output_path, metadata_header="", metadata_footer=""):
         """Create a new PDF file with sanitized text content.
         
         This creates a proper PDF document (not just text with a .pdf extension)
@@ -48,6 +48,8 @@ class PDFHandler:
             original_pdf_path: Path to the original PDF (for reference, not used)
             sanitized_text: The sanitized text content to include in the PDF
             output_path: Path where the sanitized PDF should be saved
+            metadata_header: Optional header text to prepend (e.g., AI context metadata)
+            metadata_footer: Optional footer text to append
             
         Returns:
             bool: True if successful, False otherwise
@@ -69,6 +71,19 @@ class PDFHandler:
             normal_style.fontSize = 10
             normal_style.leading = 12
             
+            # Add metadata header if provided
+            if metadata_header:
+                header_style = styles['Normal']
+                header_style.fontSize = 8
+                header_style.textColor = (0.4, 0.4, 0.4)  # Gray color
+                header_paragraphs = metadata_header.split('\n')
+                for para_text in header_paragraphs:
+                    if para_text.strip():
+                        para = Paragraph(para_text, header_style)
+                        story.append(para)
+                        story.append(Spacer(1, 3))
+                story.append(Spacer(1, 12))  # Extra space before content
+            
             # Split text into paragraphs and add to story
             paragraphs = sanitized_text.split('\n')
             for para_text in paragraphs:
@@ -78,6 +93,19 @@ class PDFHandler:
                     story.append(Spacer(1, 6))  # Small spacing between paragraphs
                 else:
                     story.append(Spacer(1, 6))  # Extra spacing for empty lines
+            
+            # Add metadata footer if provided
+            if metadata_footer:
+                story.append(Spacer(1, 12))  # Extra space before footer
+                footer_style = styles['Normal']
+                footer_style.fontSize = 8
+                footer_style.textColor = (0.4, 0.4, 0.4)  # Gray color
+                footer_paragraphs = metadata_footer.split('\n')
+                for para_text in footer_paragraphs:
+                    if para_text.strip():
+                        para = Paragraph(para_text, footer_style)
+                        story.append(para)
+                        story.append(Spacer(1, 3))
             
             # Build the PDF
             doc.build(story)

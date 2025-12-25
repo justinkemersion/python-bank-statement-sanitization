@@ -43,17 +43,19 @@ class Sanitizer:
             "street_address": r'\b\d+\s+[A-Za-z0-9\s]{2,}(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Circle|Cir)\b',
         }
 
-    def sanitize_text(self, text):
+    def sanitize_text(self, text, track_patterns=False):
         """Sanitize text by redacting sensitive information.
         
         Args:
             text: The text content to sanitize
+            track_patterns: If True, return tuple (sanitized_text, detected_patterns)
             
         Returns:
-            str: The sanitized text with sensitive data replaced by placeholders
+            str or tuple: The sanitized text, or (sanitized_text, detected_patterns) if track_patterns=True
         """
         print("Sanitizing text content...")
         sanitized_text = text
+        detected_patterns = set()
         
         # Use a placeholder system to avoid double-matching
         # Replace matches with unique placeholders first, then replace placeholders with final labels
@@ -83,6 +85,13 @@ class Sanitizer:
             # Find all matches
             matches = list(re.finditer(pattern, sanitized_text, flags=re.IGNORECASE))
             
+            if matches and track_patterns:
+                # Track which patterns were detected
+                if data_type in ["credit_card_formatted", "credit_card_unformatted"]:
+                    detected_patterns.add("credit_card")
+                else:
+                    detected_patterns.add(data_type)
+            
             # Replace matches in reverse order to preserve positions
             for match in reversed(matches):
                 start, end = match.span()
@@ -110,4 +119,6 @@ class Sanitizer:
         for placeholder, label in placeholders.items():
             sanitized_text = sanitized_text.replace(placeholder, label)
         
+        if track_patterns:
+            return sanitized_text, detected_patterns
         return sanitized_text

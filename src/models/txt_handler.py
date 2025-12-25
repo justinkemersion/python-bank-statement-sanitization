@@ -31,12 +31,14 @@ class TXTHandler:
             print(f"Error reading text from {txt_path}: {e}")
             return None
 
-    def save_sanitized_text(self, sanitized_text, output_path):
+    def save_sanitized_text(self, sanitized_text, output_path, metadata_header="", metadata_footer=""):
         """Save sanitized text to a TXT file with UTF-8 encoding.
         
         Args:
             sanitized_text: The sanitized text content to save
             output_path: Path where the sanitized file should be saved
+            metadata_header: Optional header text to prepend (e.g., AI context metadata)
+            metadata_footer: Optional footer text to append
             
         Returns:
             bool: True if successful, False otherwise
@@ -44,7 +46,13 @@ class TXTHandler:
         print(f"Saving sanitized TXT to: {output_path}")
         try:
             with open(output_path, 'w', encoding='utf-8') as f:
+                if metadata_header:
+                    f.write(metadata_header)
+                    f.write("\n")
                 f.write(sanitized_text)
+                if metadata_footer:
+                    f.write("\n")
+                    f.write(metadata_footer)
             return True
         except PermissionError:
             print(f"Error: Permission denied when writing to: {output_path}")
