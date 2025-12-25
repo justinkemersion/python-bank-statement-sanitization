@@ -20,6 +20,7 @@ from src.models.csv_handler import CSVHandler
 from src.models.excel_handler import ExcelHandler
 from src.models.metadata import MetadataGenerator
 from src.models.database_exporter import DatabaseExporter
+from src.models.spending_analytics import SpendingAnalytics
 from src.views.cli import CLIView, MessageLevel, Colors
 
 
@@ -169,6 +170,34 @@ Examples:
         dest="query_limit",
         type=int,
         help="Limit number of query results (default: no limit)"
+    )
+    
+    # Spending analytics arguments
+    parser.add_argument(
+        "--spending-report",
+        dest="spending_report",
+        help="Generate comprehensive spending analysis report (requires --query-db or --export-db)"
+    )
+    
+    parser.add_argument(
+        "--year",
+        dest="report_year",
+        type=int,
+        help="Filter spending report by year (use with --spending-report)"
+    )
+    
+    parser.add_argument(
+        "--top-categories",
+        dest="top_categories",
+        type=int,
+        help="Show top N spending categories (requires --query-db)"
+    )
+    
+    parser.add_argument(
+        "--top-merchants",
+        dest="top_merchants",
+        type=int,
+        help="Show top N merchants by spending (requires --query-db)"
     )
     
     parser.add_argument(
@@ -676,6 +705,36 @@ def handle_query_mode(args, cli: CLIView):
         db_exporter.close()
         return
     
+    # Handle spending analytics
+    if args.spending_report or args.top_categories or args.top_merchants:
+        analytics = SpendingAnalytics(db_exporter.conn)
+        
+        if args.spending_report:
+            cli.print_header("Generating Spending Report")
+            report_path = os.path.abspath(args.spending_report)
+            if analytics.generate_spending_report(report_path, year=args.report_year):
+                cli.print(f"\n✓ Spending report generated: {report_path}", MessageLevel.SUCCESS)
+                cli.print("  Comprehensive spending analysis with monthly trends and category breakdowns.", MessageLevel.INFO)
+            else:
+                cli.print(f"✗ Failed to generate spending report", MessageLevel.ERROR)
+        
+        if args.top_categories:
+            cli.print_header(f"Top {args.top_categories} Spending Categories")
+            categories = analytics.get_category_breakdown()
+            for i, cat in enumerate(categories[:args.top_categories], 1):
+                cli.print(f"{i}. {cat['category']:<25} ${abs(cat['total_spending']):>12,.2f} "
+                         f"({cat['percentage']:.1f}%) - {cat['transaction_count']} transactions", MessageLevel.INFO)
+        
+        if args.top_merchants:
+            cli.print_header(f"Top {args.top_merchants} Merchants by Spending")
+            merchants = analytics.get_top_merchants(limit=args.top_merchants)
+            for i, merch in enumerate(merchants, 1):
+                cli.print(f"{i}. {merch['merchant']:<30} ${abs(merch['total_spending']):>12,.2f} "
+                         f"- {merch['transaction_count']} transactions", MessageLevel.INFO)
+        
+        db_exporter.close()
+        return
+    
     # Query transactions
     cli.print_header("Query Results")
     
@@ -715,7 +774,7 @@ def main():
     cli = CLIView(verbose=args.verbose, quiet=args.quiet, dry_run=args.dry_run)
     
     # Handle query mode (if --query-db is specified)
-    if args.query_db or args.list_recurring:
+    if args.query_db or args.list_recurring or args.spending_report or args.top_categories or args.top_merchants:
         handle_query_mode(args, cli)
         sys.exit(0)
     
@@ -841,6 +900,16 @@ def main():
                     cli.print("  This file is ready for programmatic access.", MessageLevel.INFO)
                 else:
                     cli.print(f"✗ Failed to export JSON", MessageLevel.ERROR)
+            
+            # Generate spending report if requested
+            if args.spending_report:
+                analytics = SpendingAnalytics(db_exporter.conn)
+                report_path = os.path.abspath(args.spending_report)
+                if analytics.generate_spending_report(report_path, year=args.report_year):
+                    cli.print(f"\n✓ Spending report generated: {report_path}", MessageLevel.SUCCESS)
+                    cli.print("  Comprehensive spending analysis with monthly trends and category breakdowns.", MessageLevel.INFO)
+                else:
+                    cli.print(f"✗ Failed to generate spending report", MessageLevel.ERROR)
             
             db_exporter.close()
         

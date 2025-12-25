@@ -79,6 +79,12 @@ class DatabaseExporter:
         except sqlite3.OperationalError:
             pass  # Column already exists
         
+        # Add tags column if it doesn't exist (migration)
+        try:
+            cursor.execute("ALTER TABLE transactions ADD COLUMN tags TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        
         # Files table - track which files have been imported
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS imported_files (
