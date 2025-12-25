@@ -7,6 +7,7 @@ Entry point for the bank statement sanitization tool.
 import argparse
 import sys
 import os
+from typing import Tuple
 
 # Add src to path to allow imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -30,17 +31,19 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s ./statements
-  %(prog)s ./statements -o ./sanitized
-  %(prog)s ./statements --verbose
-  %(prog)s ./statements --dry-run
-  %(prog)s ./statements --quiet
+  %(prog)s ./statements                    # Process all files in directory
+  %(prog)s ./statement.pdf                 # Process a single file
+  %(prog)s ./statements -o ./sanitized     # Specify output directory
+  %(prog)s ./statement.pdf -o ./output     # Process file to specific directory
+  %(prog)s ./statements --verbose          # Verbose output
+  %(prog)s ./statements --dry-run          # Preview without modifying
+  %(prog)s ./statements --quiet            # Minimal output
         """
     )
     
     parser.add_argument(
-        "input_dir",
-        help="Path to the directory containing bank statements to sanitize"
+        "input_path",
+        help="Path to a file or directory containing bank statements to sanitize"
     )
     
     parser.add_argument(
@@ -83,21 +86,39 @@ Examples:
     return parser.parse_args()
 
 
-def validate_directories(input_dir: str, output_dir: str, cli: CLIView) -> bool:
-    """Validate input and output directories.
+def validate_input_path(input_path: str, cli: CLIView) -> Tuple[bool, bool, str]:
+    """Validate input path (file or directory).
     
     Args:
-        input_dir: Input directory path
+        input_path: Input file or directory path
+        cli: CLI view instance for output
+        
+    Returns:
+        tuple: (is_valid, is_file, resolved_path)
+    """
+    if not os.path.exists(input_path):
+        cli.print(f"Input path '{input_path}' not found.", MessageLevel.ERROR)
+        return False, False, input_path
+    
+    if os.path.isfile(input_path):
+        return True, True, os.path.abspath(input_path)
+    elif os.path.isdir(input_path):
+        return True, False, os.path.abspath(input_path)
+    else:
+        cli.print(f"Input path '{input_path}' is neither a file nor a directory.", MessageLevel.ERROR)
+        return False, False, input_path
+
+
+def ensure_output_directory(output_dir: str, cli: CLIView) -> bool:
+    """Ensure output directory exists.
+    
+    Args:
         output_dir: Output directory path
         cli: CLI view instance for output
         
     Returns:
-        bool: True if directories are valid, False otherwise
+        bool: True if directory is valid/created, False otherwise
     """
-    if not os.path.isdir(input_dir):
-        cli.print(f"Input directory '{input_dir}' not found or is not a directory.", MessageLevel.ERROR)
-        return False
-    
     if not os.path.exists(output_dir):
         if not cli.dry_run:
             try:
@@ -110,6 +131,92 @@ def validate_directories(input_dir: str, output_dir: str, cli: CLIView) -> bool:
             cli.print(f"Would create output directory: {output_dir}", MessageLevel.INFO)
     
     return True
+
+
+def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_metadata: bool = True):
+    """Sanitize a single file.
+    
+    Args:
+        file_path: Path to the file to sanitize
+        output_dir: Directory to save sanitized file
+        cli: CLI view instance for output
+        include_metadata: Whether to include AI-friendly metadata headers
+    """
+    sanitizer = Sanitizer()
+    pdf_handler = PDFHandler()
+    txt_handler = TXTHandler()
+    metadata_gen = MetadataGenerator(include_metadata=include_metadata)
+    
+    base_name, ext = os.path.splitext(file_path)
+    sanitized_filename = f"{os.path.basename(base_name)}-sanitized{ext}"
+    sanitized_file_path = os.path.join(output_dir, sanitized_filename)
+    
+    cli.print_file_info(file_path, "Processing")
+    
+    try:
+        if ext.lower() == '.pdf':
+            if cli.verbose:
+                cli.print("  Extracting text from PDF...", MessageLevel.DEBUG)
+            text_content = pdf_handler.extract_text(file_path)
+            if text_content is None:
+                cli.print(f"  Failed to extract text from PDF", MessageLevel.ERROR)
+                cli.files_failed += 1
+                return
+            
+            if cli.verbose:
+                cli.print(f"  Extracted {len(text_content)} characters", MessageLevel.DEBUG)
+                cli.print("  Sanitizing content...", MessageLevel.DEBUG)
+            sanitized_text, detected_patterns = sanitizer.sanitize_text(text_content, track_patterns=True)
+            
+            # Generate metadata
+            metadata_header = metadata_gen.generate_header(detected_patterns)
+            metadata_footer = metadata_gen.generate_footer()
+            
+            if cli.verbose:
+                cli.print("  Creating sanitized PDF...", MessageLevel.DEBUG)
+            success = pdf_handler.create_sanitized_pdf(file_path, sanitized_text, sanitized_file_path,
+                                                      metadata_header, metadata_footer)
+            
+        elif ext.lower() == '.txt':
+            if cli.verbose:
+                cli.print("  Reading text file...", MessageLevel.DEBUG)
+            text_content = txt_handler.read_text(file_path)
+            if text_content is None:
+                cli.print(f"  Failed to read text file", MessageLevel.ERROR)
+                cli.files_failed += 1
+                return
+            
+            if cli.verbose:
+                cli.print(f"  Read {len(text_content)} characters", MessageLevel.DEBUG)
+                cli.print("  Sanitizing content...", MessageLevel.DEBUG)
+            sanitized_text, detected_patterns = sanitizer.sanitize_text(text_content, track_patterns=True)
+            
+            # Generate metadata
+            metadata_header = metadata_gen.generate_header(detected_patterns)
+            metadata_footer = metadata_gen.generate_footer()
+            
+            if cli.verbose:
+                cli.print("  Saving sanitized file...", MessageLevel.DEBUG)
+            success = txt_handler.save_sanitized_text(sanitized_text, sanitized_file_path, 
+                                                     metadata_header, metadata_footer)
+        else:
+            cli.print(f"  Unsupported file type: {ext}", MessageLevel.WARNING)
+            cli.files_skipped += 1
+            return
+        
+        if success:
+            cli.print(f"  ✓ Successfully sanitized: {sanitized_filename}", MessageLevel.SUCCESS)
+            cli.files_processed += 1
+        else:
+            cli.print(f"  ✗ Failed to save sanitized file", MessageLevel.ERROR)
+            cli.files_failed += 1
+            
+    except Exception as e:
+        cli.print(f"  ✗ Unexpected error: {e}", MessageLevel.ERROR)
+        if cli.verbose:
+            import traceback
+            cli.print(traceback.format_exc(), MessageLevel.DEBUG)
+        cli.files_failed += 1
 
 
 def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metadata: bool = True):
@@ -234,12 +341,24 @@ def main():
     # Initialize CLI view
     cli = CLIView(verbose=args.verbose, quiet=args.quiet, dry_run=args.dry_run)
     
-    # Determine output directory
-    input_directory = os.path.abspath(args.input_dir)
-    output_directory = os.path.abspath(args.output_dir) if args.output_dir else input_directory
+    # Validate input path (file or directory)
+    is_valid, is_file, input_path = validate_input_path(args.input_path, cli)
+    if not is_valid:
+        sys.exit(1)
     
-    # Validate directories
-    if not validate_directories(input_directory, output_directory, cli):
+    # Determine output directory
+    if is_file:
+        # For single file, output to specified directory or same directory as file
+        if args.output_dir:
+            output_directory = os.path.abspath(args.output_dir)
+        else:
+            output_directory = os.path.dirname(input_path)
+    else:
+        # For directory, output to specified directory or same as input
+        output_directory = os.path.abspath(args.output_dir) if args.output_dir else input_path
+    
+    # Ensure output directory exists
+    if not ensure_output_directory(output_directory, cli):
         sys.exit(1)
     
     # Print configuration
@@ -248,8 +367,9 @@ def main():
         cli.print_banner()
         print()
         # Configuration table
+        input_label = "Input File" if is_file else "Input Directory"
         config_items = [
-            ("Input Directory", input_directory),
+            (input_label, input_path),
             ("Output Directory", output_directory),
         ]
         
@@ -273,7 +393,11 @@ def main():
     
     # Run sanitization
     try:
-        sanitize_files(input_directory, output_directory, cli, include_metadata=include_metadata)
+        if is_file:
+            cli.print_header("Processing File")
+            sanitize_single_file(input_path, output_directory, cli, include_metadata=include_metadata)
+        else:
+            sanitize_files(input_path, output_directory, cli, include_metadata=include_metadata)
         cli.print_summary()
         
         # Exit with appropriate code
