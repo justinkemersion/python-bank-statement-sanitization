@@ -14,6 +14,7 @@ from src.models.transaction_categorizer import TransactionCategorizer
 from src.models.merchant_extractor import MerchantExtractor
 from src.models.paystub_extractor import PaystubExtractor
 from src.models.balance_extractor import BalanceExtractor
+from src.models.investment_extractor import InvestmentExtractor
 
 
 class DatabaseExporter:
@@ -31,6 +32,7 @@ class DatabaseExporter:
         self.merchant_extractor = MerchantExtractor()
         self.paystub_extractor = PaystubExtractor()
         self.balance_extractor = BalanceExtractor()
+        self.investment_extractor = InvestmentExtractor()
         self.paystub_extractor = PaystubExtractor()
     
     def connect(self):
@@ -207,6 +209,66 @@ class DatabaseExporter:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_bill_due_date ON bills(next_due_date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_bill_active ON bills(is_active)")
         
+        # Investment accounts table - track investment account information
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS investment_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_file TEXT NOT NULL,
+                account_type TEXT NOT NULL,
+                bank_name TEXT,
+                account_name TEXT,
+                statement_date TEXT,
+                portfolio_value REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Holdings table - track securities positions
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS holdings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                investment_account_id INTEGER,
+                source_file TEXT NOT NULL,
+                statement_date TEXT,
+                ticker TEXT,
+                security_name TEXT,
+                quantity REAL,
+                market_value REAL,
+                cost_basis REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (investment_account_id) REFERENCES investment_accounts(id)
+            )
+        """)
+        
+        # Investment transactions table - track buys, sells, dividends, etc.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS investment_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                investment_account_id INTEGER,
+                source_file TEXT NOT NULL,
+                transaction_date TEXT,
+                transaction_type TEXT NOT NULL,
+                security_ticker TEXT,
+                security_name TEXT,
+                quantity REAL,
+                price REAL,
+                amount REAL,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (investment_account_id) REFERENCES investment_accounts(id)
+            )
+        """)
+        
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_account_type ON investment_accounts(account_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_bank ON investment_accounts(bank_name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_date ON investment_accounts(statement_date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_holding_ticker ON holdings(ticker)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_holding_date ON holdings(statement_date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_inv_trans_type ON investment_transactions(transaction_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_inv_trans_date ON investment_transactions(transaction_date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_inv_trans_ticker ON investment_transactions(security_ticker)")
+        
         self.conn.commit()
     
     def _detect_bank_name(self, text: str, source_file: str) -> Optional[str]:
@@ -320,6 +382,13 @@ class DatabaseExporter:
             return 'savings'
         if any(keyword in filename_lower for keyword in ['credit', 'card', 'amex', 'discover', 'visa', 'mastercard']):
             return 'credit_card'
+        if any(keyword in filename_lower for keyword in ['roth', 'ira']):
+            # Check if it's Roth specifically
+            if 'roth' in filename_lower:
+                return 'roth_ira'
+            return 'traditional_ira'
+        if any(keyword in filename_lower for keyword in ['investment', 'brokerage', 'trading', 'portfolio']):
+            return 'investment_account'
         
         # Check text content for account type indicators
         account_patterns = {
@@ -341,6 +410,23 @@ class DatabaseExporter:
                 r'minimum\s+payment',
                 r'available\s+credit',
                 r'credit\s+limit',
+            ],
+            'roth_ira': [
+                r'roth\s+ira',
+                r'roth\s+individual\s+retirement',
+            ],
+            'traditional_ira': [
+                r'traditional\s+ira',
+                r'rollover\s+ira',
+                r'ira\s+account',
+                r'individual\s+retirement\s+account',
+            ],
+            'investment_account': [
+                r'investment\s+account',
+                r'brokerage\s+account',
+                r'securities\s+account',
+                r'trading\s+account',
+                r'portfolio\s+statement',
             ],
         }
         
@@ -800,6 +886,44 @@ class DatabaseExporter:
                         'notes': row[10] or '',
                         'is_recurring': 'Yes' if row[11] else 'No'
                     })
+            
+            # Also export investment data if available
+            cursor.execute("""
+                SELECT 
+                    ia.account_type, ia.bank_name, ia.statement_date, ia.portfolio_value,
+                    h.ticker, h.security_name, h.quantity, h.market_value
+                FROM investment_accounts ia
+                LEFT JOIN holdings h ON h.investment_account_id = ia.id
+                WHERE (ia.account_type, ia.bank_name, ia.statement_date) IN (
+                    SELECT account_type, bank_name, MAX(statement_date)
+                    FROM investment_accounts
+                    GROUP BY account_type, bank_name
+                )
+                ORDER BY ia.account_type, ia.bank_name, h.market_value DESC
+            """)
+            
+            investment_rows = cursor.fetchall()
+            if investment_rows:
+                # Append investment data to CSV
+                f.write("\n\n# INVESTMENT ACCOUNT DATA\n")
+                f.write("# This section contains investment account information.\n")
+                f.write("# Columns: account_type, bank_name, statement_date, portfolio_value, ticker, security_name, quantity, market_value\n\n")
+                
+                investment_writer = csv.writer(f)
+                investment_writer.writerow(['account_type', 'bank_name', 'statement_date', 'portfolio_value', 
+                                           'ticker', 'security_name', 'quantity', 'market_value'])
+                
+                for row in investment_rows:
+                    investment_writer.writerow([
+                        row[0] or '',  # account_type
+                        row[1] or '',   # bank_name
+                        row[2] or '',   # statement_date
+                        row[3] if row[3] is not None else '',  # portfolio_value
+                        row[4] or '',  # ticker
+                        row[5] or '',  # security_name
+                        row[6] if row[6] is not None else '',  # quantity
+                        row[7] if row[7] is not None else '',  # market_value
+                    ])
             
             return True
         except Exception as e:

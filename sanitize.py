@@ -470,28 +470,42 @@ def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_
                                     if cli.verbose:
                                         cli.print(f"  All {len(paystubs)} paystub(s) already exist in database", MessageLevel.DEBUG)
                         
-                        # Extract balance information (for statements, not paystubs)
+                        # Extract investment account data first (for statements, not paystubs)
                         if not paystubs and ext.lower() in ['.pdf', '.txt']:
                             # Detect account type and bank name first
                             account_type = db_exporter._detect_account_type(sanitized_text, os.path.basename(file_path))
                             bank_name = db_exporter._detect_bank_name(sanitized_text, os.path.basename(file_path))
                             
-                            # Extract balance
-                            balance = db_exporter.extract_balance_from_text(sanitized_text, os.path.basename(file_path), 
-                                                                           account_type, bank_name)
-                            if balance:
-                                inserted = db_exporter.insert_balance(balance, skip_duplicates=True)
-                                if inserted:
+                            # Try to extract investment account data
+                            investment_data = db_exporter.extract_investment_from_text(sanitized_text, os.path.basename(file_path), bank_name)
+                            if investment_data:
+                                account_id = db_exporter.insert_investment_account(investment_data, skip_duplicates=True)
+                                if account_id:
                                     if cli.verbose:
-                                        balance_info = f"Balance: ${balance.get('balance', 0):,.2f}"
-                                        if balance.get('credit_limit'):
-                                            balance_info += f", Limit: ${balance.get('credit_limit', 0):,.2f}"
-                                        if balance.get('minimum_payment'):
-                                            balance_info += f", Min Payment: ${balance.get('minimum_payment', 0):,.2f}"
-                                        cli.print(f"  Extracted account balance: {balance_info}", MessageLevel.DEBUG)
+                                        portfolio_value = investment_data.get('portfolio_value', 0)
+                                        holdings_count = len(investment_data.get('holdings', []))
+                                        transactions_count = len(investment_data.get('transactions', []))
+                                        cli.print(f"  Extracted investment account: {investment_data.get('account_type', 'investment')} "
+                                                 f"(Portfolio: ${portfolio_value:,.2f}, {holdings_count} holdings, {transactions_count} transactions)", MessageLevel.DEBUG)
+                                    db_exporter.record_file_import(file_path, 'investment', 1, f"Investment account: {investment_data.get('account_type')}")
+                            
+                            # Extract balance information (for non-investment accounts)
+                            if not investment_data:
+                                balance = db_exporter.extract_balance_from_text(sanitized_text, os.path.basename(file_path), 
+                                                                               account_type, bank_name)
+                                if balance:
+                                    inserted = db_exporter.insert_balance(balance, skip_duplicates=True)
+                                    if inserted:
+                                        if cli.verbose:
+                                            balance_info = f"Balance: ${balance.get('balance', 0):,.2f}"
+                                            if balance.get('credit_limit'):
+                                                balance_info += f", Limit: ${balance.get('credit_limit', 0):,.2f}"
+                                            if balance.get('minimum_payment'):
+                                                balance_info += f", Min Payment: ${balance.get('minimum_payment', 0):,.2f}"
+                                            cli.print(f"  Extracted account balance: {balance_info}", MessageLevel.DEBUG)
                         
-                        # Extract transactions (skip if this was a paystub)
-                        if not paystubs:
+                        # Extract transactions (skip if this was a paystub or investment account)
+                        if not paystubs and not investment_data:
                             if ext.lower() == '.csv':
                                 transactions = db_exporter.extract_transactions_from_csv(sanitized_rows, os.path.basename(file_path))
                             elif ext.lower() in ['.xlsx', '.xls']:
@@ -728,28 +742,42 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metada
                                         if cli.verbose:
                                             cli.print(f"  All {len(paystubs)} paystub(s) already exist in database", MessageLevel.DEBUG)
                             
-                            # Extract balance information (for statements, not paystubs)
+                            # Extract investment account data first (for statements, not paystubs)
                             if not paystubs and ext.lower() in ['.pdf', '.txt']:
                                 # Detect account type and bank name first
                                 account_type = db_exporter._detect_account_type(sanitized_text, os.path.basename(file_path))
                                 bank_name = db_exporter._detect_bank_name(sanitized_text, os.path.basename(file_path))
                                 
-                                # Extract balance
-                                balance = db_exporter.extract_balance_from_text(sanitized_text, os.path.basename(file_path), 
-                                                                               account_type, bank_name)
-                                if balance:
-                                    inserted = db_exporter.insert_balance(balance, skip_duplicates=True)
-                                    if inserted:
+                                # Try to extract investment account data
+                                investment_data = db_exporter.extract_investment_from_text(sanitized_text, os.path.basename(file_path), bank_name)
+                                if investment_data:
+                                    account_id = db_exporter.insert_investment_account(investment_data, skip_duplicates=True)
+                                    if account_id:
                                         if cli.verbose:
-                                            balance_info = f"Balance: ${balance.get('balance', 0):,.2f}"
-                                            if balance.get('credit_limit'):
-                                                balance_info += f", Limit: ${balance.get('credit_limit', 0):,.2f}"
-                                            if balance.get('minimum_payment'):
-                                                balance_info += f", Min Payment: ${balance.get('minimum_payment', 0):,.2f}"
-                                            cli.print(f"  Extracted account balance: {balance_info}", MessageLevel.DEBUG)
+                                            portfolio_value = investment_data.get('portfolio_value', 0)
+                                            holdings_count = len(investment_data.get('holdings', []))
+                                            transactions_count = len(investment_data.get('transactions', []))
+                                            cli.print(f"  Extracted investment account: {investment_data.get('account_type', 'investment')} "
+                                                     f"(Portfolio: ${portfolio_value:,.2f}, {holdings_count} holdings, {transactions_count} transactions)", MessageLevel.DEBUG)
+                                        db_exporter.record_file_import(file_path, 'investment', 1, f"Investment account: {investment_data.get('account_type')}")
+                                
+                                # Extract balance information (for non-investment accounts)
+                                if not investment_data:
+                                    balance = db_exporter.extract_balance_from_text(sanitized_text, os.path.basename(file_path), 
+                                                                                   account_type, bank_name)
+                                    if balance:
+                                        inserted = db_exporter.insert_balance(balance, skip_duplicates=True)
+                                        if inserted:
+                                            if cli.verbose:
+                                                balance_info = f"Balance: ${balance.get('balance', 0):,.2f}"
+                                                if balance.get('credit_limit'):
+                                                    balance_info += f", Limit: ${balance.get('credit_limit', 0):,.2f}"
+                                                if balance.get('minimum_payment'):
+                                                    balance_info += f", Min Payment: ${balance.get('minimum_payment', 0):,.2f}"
+                                                cli.print(f"  Extracted account balance: {balance_info}", MessageLevel.DEBUG)
                             
-                            # Extract transactions (skip if this was a paystub)
-                            if not paystubs:
+                            # Extract transactions (skip if this was a paystub or investment account)
+                            if not paystubs and not investment_data:
                                 if ext.lower() == '.csv':
                                     transactions = db_exporter.extract_transactions_from_csv(sanitized_rows, os.path.basename(file_path))
                                 elif ext.lower() in ['.xlsx', '.xls']:
@@ -1047,7 +1075,7 @@ def main():
     cli = CLIView(verbose=args.verbose, quiet=args.quiet, dry_run=args.dry_run)
     
     # Handle query mode (if --query-db is specified)
-    if args.query_db or args.list_recurring or args.spending_report or args.top_categories or args.top_merchants or args.debt_payoff or args.show_debts or args.show_bills or args.upcoming_bills:
+    if args.query_db or args.list_recurring or args.spending_report or args.top_categories or args.top_merchants or args.debt_payoff or args.show_debts or args.show_bills or args.upcoming_bills or args.show_investments or args.show_holdings:
         handle_query_mode(args, cli)
         sys.exit(0)
     
@@ -1166,6 +1194,17 @@ def main():
                 for bank in stats['banks']['banks']:
                     cli.print(f"{bank['bank_name']:<25} {bank['account_type']:<12} "
                              f"{bank['transaction_count']:>6} transactions, ${bank['total_amount']:>12,.2f} total", MessageLevel.INFO)
+            
+            # Investment account statistics
+            if stats['investments']['total_portfolio_value'] > 0:
+                cli.print("", MessageLevel.INFO)  # Blank line
+                cli.print_header("Investment Accounts")
+                cli.print(f"Total Portfolio Value: ${stats['investments']['total_portfolio_value']:,.2f}", MessageLevel.INFO)
+                cli.print(f"Unique Securities: {stats['investments']['unique_securities']}", MessageLevel.INFO)
+                for account_type, data in stats['investments']['accounts_by_type'].items():
+                    account_display = account_type.replace('_', ' ').title()
+                    cli.print(f"{account_display:<20} {data['count']} account(s), "
+                             f"${data['total_value']:,.2f} total", MessageLevel.INFO)
             
             # Parse date range if provided
             date_range = None
