@@ -2073,4 +2073,222 @@ class DatabaseExporter:
             'last_pay_date': last_pay,
             'employers': employers
         }
+    
+    def set_budget(self, category: str, month: str, year: int, amount: float) -> bool:
+        """Set or update a monthly budget for a category.
+        
+        Args:
+            category: Category name (e.g., 'Groceries', 'Restaurants')
+            month: Month string (e.g., '01', '02', 'January')
+            year: Year (e.g., 2024)
+            amount: Budget amount
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Normalize month to MM format
+            month_map = {
+                'january': '01', 'jan': '01', '1': '01',
+                'february': '02', 'feb': '02', '2': '02',
+                'march': '03', 'mar': '03', '3': '03',
+                'april': '04', 'apr': '04', '4': '04',
+                'may': '05', '5': '05',
+                'june': '06', 'jun': '06', '6': '06',
+                'july': '07', 'jul': '07', '7': '07',
+                'august': '08', 'aug': '08', '8': '08',
+                'september': '09', 'sep': '09', 'sept': '09', '9': '09',
+                'october': '10', 'oct': '10', '10': '10',
+                'november': '11', 'nov': '11', '11': '11',
+                'december': '12', 'dec': '12', '12': '12',
+            }
+            
+            month_lower = str(month).lower()
+            if month_lower in month_map:
+                month = month_map[month_lower]
+            elif len(str(month)) == 1:
+                month = f"0{month}"
+            elif len(str(month)) == 2 and month.isdigit():
+                month = str(month)
+            else:
+                return False  # Invalid month format
+            
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO budgets (category, month, year, budget_amount, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (category, month, year, amount))
+            
+            self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error setting budget: {e}")
+            return False
+    
+    def get_budget(self, category: str, month: str, year: int) -> Optional[float]:
+        """Get budget amount for a category and month.
+        
+        Args:
+            category: Category name
+            month: Month string (e.g., '01', 'January')
+            year: Year
+            
+        Returns:
+            Budget amount or None if not set
+        """
+        # Normalize month
+        month_map = {
+            'january': '01', 'jan': '01', '1': '01',
+            'february': '02', 'feb': '02', '2': '02',
+            'march': '03', 'mar': '03', '3': '03',
+            'april': '04', 'apr': '04', '4': '04',
+            'may': '05', '5': '05',
+            'june': '06', 'jun': '06', '6': '06',
+            'july': '07', 'jul': '07', '7': '07',
+            'august': '08', 'aug': '08', '8': '08',
+            'september': '09', 'sep': '09', 'sept': '09', '9': '09',
+            'october': '10', 'oct': '10', '10': '10',
+            'november': '11', 'nov': '11', '11': '11',
+            'december': '12', 'dec': '12', '12': '12',
+        }
+        
+        month_lower = str(month).lower()
+        if month_lower in month_map:
+            month = month_map[month_lower]
+        elif len(str(month)) == 1:
+            month = f"0{month}"
+        
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT budget_amount FROM budgets
+            WHERE category = ? AND month = ? AND year = ? AND is_active = 1
+        """, (category, month, year))
+        
+        row = cursor.fetchone()
+        return row[0] if row else None
+    
+    def get_budget_status(self, month: Optional[str] = None, year: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Get budget status (budget vs actual spending) for a month.
+        
+        Args:
+            month: Month string (default: current month)
+            year: Year (default: current year)
+            
+        Returns:
+            List of budget status dictionaries
+        """
+        from datetime import datetime
+        
+        if not month or not year:
+            now = datetime.now()
+            month = month or f"{now.month:02d}"
+            year = year or now.year
+        
+        # Normalize month
+        month_map = {
+            'january': '01', 'jan': '01', '1': '01',
+            'february': '02', 'feb': '02', '2': '02',
+            'march': '03', 'mar': '03', '3': '03',
+            'april': '04', 'apr': '04', '4': '04',
+            'may': '05', '5': '05',
+            'june': '06', 'jun': '06', '6': '06',
+            'july': '07', 'jul': '07', '7': '07',
+            'august': '08', 'aug': '08', '8': '08',
+            'september': '09', 'sep': '09', 'sept': '09', '9': '09',
+            'october': '10', 'oct': '10', '10': '10',
+            'november': '11', 'nov': '11', '11': '11',
+            'december': '12', 'dec': '12', '12': '12',
+        }
+        
+        month_lower = str(month).lower()
+        if month_lower in month_map:
+            month = month_map[month_lower]
+        elif len(str(month)) == 1:
+            month = f"0{month}"
+        
+        cursor = self.conn.cursor()
+        
+        # Get all active budgets for the month
+        cursor.execute("""
+            SELECT category, budget_amount
+            FROM budgets
+            WHERE month = ? AND year = ? AND is_active = 1
+        """, (month, year))
+        
+        budgets = cursor.fetchall()
+        
+        # Get actual spending for each category
+        month_start = f"{year}-{month}-01"
+        # Calculate last day of month
+        if month == '12':
+            month_end = f"{year}-12-31"
+        else:
+            next_month = int(month) + 1
+            month_end = f"{year}-{next_month:02d}-01"
+        
+        status_list = []
+        for category, budget_amount in budgets:
+            # Get actual spending for this category in this month
+            cursor.execute("""
+                SELECT COALESCE(SUM(ABS(amount)), 0)
+                FROM transactions
+                WHERE category = ?
+                AND transaction_date >= ?
+                AND transaction_date < ?
+                AND amount < 0
+            """, (category, month_start, month_end))
+            
+            actual_spending = cursor.fetchone()[0] or 0
+            remaining = budget_amount - actual_spending
+            percentage = (actual_spending / budget_amount * 100) if budget_amount > 0 else 0
+            
+            status_list.append({
+                'category': category,
+                'budget': budget_amount,
+                'spent': actual_spending,
+                'remaining': remaining,
+                'percentage': percentage,
+                'status': 'over' if actual_spending > budget_amount else 'under',
+            })
+        
+        return status_list
+    
+    def get_all_budgets(self, year: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Get all active budgets.
+        
+        Args:
+            year: Optional year filter (default: all years)
+            
+        Returns:
+            List of budget dictionaries
+        """
+        cursor = self.conn.cursor()
+        
+        if year:
+            cursor.execute("""
+                SELECT category, month, year, budget_amount
+                FROM budgets
+                WHERE year = ? AND is_active = 1
+                ORDER BY year, month, category
+            """, (year,))
+        else:
+            cursor.execute("""
+                SELECT category, month, year, budget_amount
+                FROM budgets
+                WHERE is_active = 1
+                ORDER BY year, month, category
+            """)
+        
+        rows = cursor.fetchall()
+        
+        budgets = []
+        for row in rows:
+            budgets.append({
+                'category': row[0],
+                'month': row[1],
+                'year': row[2],
+                'budget_amount': row[3],
+            })
+        
+        return budgets
 
