@@ -404,22 +404,38 @@ def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_
                             if cli.verbose:
                                 cli.print(f"  Removed {deleted} existing transactions for re-import", MessageLevel.DEBUG)
                         
-                        if ext.lower() == '.csv':
-                            transactions = db_exporter.extract_transactions_from_csv(sanitized_rows, os.path.basename(file_path))
-                        elif ext.lower() in ['.xlsx', '.xls']:
-                            transactions = db_exporter.extract_transactions_from_dataframe(sanitized_df, os.path.basename(file_path))
-                        elif ext.lower() in ['.pdf', '.txt']:
-                            transactions = db_exporter.extract_transactions_from_text(sanitized_text, os.path.basename(file_path))
-                        else:
-                            transactions = []
+                        # Try to extract paystub data first (for PDF/TXT files)
+                        paystub = None
+                        if ext.lower() in ['.pdf', '.txt']:
+                            paystub = db_exporter.extract_paystub_from_text(sanitized_text, os.path.basename(file_path))
+                            if paystub:
+                                inserted = db_exporter.insert_paystub(paystub, skip_duplicates=True)
+                                if inserted:
+                                    if cli.verbose:
+                                        cli.print(f"  Extracted and exported paystub data (Pay Date: {paystub.get('pay_date', 'N/A')}, Net: ${paystub.get('net_pay', 0):.2f})", MessageLevel.DEBUG)
+                                    db_exporter.record_file_import(file_path, 'paystub', 1, 'Paystub extracted')
+                                else:
+                                    if cli.verbose:
+                                        cli.print(f"  Paystub already exists in database", MessageLevel.DEBUG)
                         
-                        if transactions:
-                            result = db_exporter.insert_transactions(transactions, skip_duplicates=True)
-                            db_exporter.record_file_import(file_path, ext.lower()[1:], result['inserted'])
-                            if cli.verbose:
-                                cli.print(f"  Exported {result['inserted']} transactions to database", MessageLevel.DEBUG)
-                                if result['skipped'] > 0:
-                                    cli.print(f"  Skipped {result['skipped']} duplicate transactions", MessageLevel.DEBUG)
+                        # Extract transactions (skip if this was a paystub)
+                        if not paystub:
+                            if ext.lower() == '.csv':
+                                transactions = db_exporter.extract_transactions_from_csv(sanitized_rows, os.path.basename(file_path))
+                            elif ext.lower() in ['.xlsx', '.xls']:
+                                transactions = db_exporter.extract_transactions_from_dataframe(sanitized_df, os.path.basename(file_path))
+                            elif ext.lower() in ['.pdf', '.txt']:
+                                transactions = db_exporter.extract_transactions_from_text(sanitized_text, os.path.basename(file_path))
+                            else:
+                                transactions = []
+                            
+                            if transactions:
+                                result = db_exporter.insert_transactions(transactions, skip_duplicates=True)
+                                db_exporter.record_file_import(file_path, ext.lower()[1:], result['inserted'])
+                                if cli.verbose:
+                                    cli.print(f"  Exported {result['inserted']} transactions to database", MessageLevel.DEBUG)
+                                    if result['skipped'] > 0:
+                                        cli.print(f"  Skipped {result['skipped']} duplicate transactions", MessageLevel.DEBUG)
                 except Exception as e:
                     if cli.verbose:
                         cli.print(f"  Warning: Failed to export to database: {e}", MessageLevel.WARNING)
@@ -614,22 +630,38 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metada
                                 if cli.verbose:
                                     cli.print(f"  Removed {deleted} existing transactions for re-import", MessageLevel.DEBUG)
                             
-                            if ext.lower() == '.csv':
-                                transactions = db_exporter.extract_transactions_from_csv(sanitized_rows, os.path.basename(file_path))
-                            elif ext.lower() in ['.xlsx', '.xls']:
-                                transactions = db_exporter.extract_transactions_from_dataframe(sanitized_df, os.path.basename(file_path))
-                            elif ext.lower() in ['.pdf', '.txt']:
-                                transactions = db_exporter.extract_transactions_from_text(sanitized_text, os.path.basename(file_path))
-                            else:
-                                transactions = []
+                            # Try to extract paystub data first (for PDF/TXT files)
+                            paystub = None
+                            if ext.lower() in ['.pdf', '.txt']:
+                                paystub = db_exporter.extract_paystub_from_text(sanitized_text, os.path.basename(file_path))
+                                if paystub:
+                                    inserted = db_exporter.insert_paystub(paystub, skip_duplicates=True)
+                                    if inserted:
+                                        if cli.verbose:
+                                            cli.print(f"  Extracted and exported paystub data (Pay Date: {paystub.get('pay_date', 'N/A')}, Net: ${paystub.get('net_pay', 0):.2f})", MessageLevel.DEBUG)
+                                        db_exporter.record_file_import(file_path, 'paystub', 1, 'Paystub extracted')
+                                    else:
+                                        if cli.verbose:
+                                            cli.print(f"  Paystub already exists in database", MessageLevel.DEBUG)
                             
-                            if transactions:
-                                result = db_exporter.insert_transactions(transactions, skip_duplicates=True)
-                                db_exporter.record_file_import(file_path, ext.lower()[1:], result['inserted'])
-                                if cli.verbose:
-                                    cli.print(f"  Exported {result['inserted']} transactions to database", MessageLevel.DEBUG)
-                                    if result['skipped'] > 0:
-                                        cli.print(f"  Skipped {result['skipped']} duplicate transactions", MessageLevel.DEBUG)
+                            # Extract transactions (skip if this was a paystub)
+                            if not paystub:
+                                if ext.lower() == '.csv':
+                                    transactions = db_exporter.extract_transactions_from_csv(sanitized_rows, os.path.basename(file_path))
+                                elif ext.lower() in ['.xlsx', '.xls']:
+                                    transactions = db_exporter.extract_transactions_from_dataframe(sanitized_df, os.path.basename(file_path))
+                                elif ext.lower() in ['.pdf', '.txt']:
+                                    transactions = db_exporter.extract_transactions_from_text(sanitized_text, os.path.basename(file_path))
+                                else:
+                                    transactions = []
+                                
+                                if transactions:
+                                    result = db_exporter.insert_transactions(transactions, skip_duplicates=True)
+                                    db_exporter.record_file_import(file_path, ext.lower()[1:], result['inserted'])
+                                    if cli.verbose:
+                                        cli.print(f"  Exported {result['inserted']} transactions to database", MessageLevel.DEBUG)
+                                        if result['skipped'] > 0:
+                                            cli.print(f"  Skipped {result['skipped']} duplicate transactions", MessageLevel.DEBUG)
                     except Exception as e:
                         if cli.verbose:
                             cli.print(f"  Warning: Failed to export to database: {e}", MessageLevel.WARNING)
@@ -868,6 +900,19 @@ def main():
                 cli.print(f"Date Range: {stats['date_range']['min']} to {stats['date_range']['max']}", MessageLevel.INFO)
             if stats['total_amount']:
                 cli.print(f"Total Amount: ${stats['total_amount']:,.2f}", MessageLevel.INFO)
+            
+            # Paystub statistics
+            if stats['paystubs']['total_paystubs'] > 0:
+                cli.print("", MessageLevel.INFO)  # Blank line
+                cli.print_header("Income Statistics")
+                cli.print(f"Total Paystubs: {stats['paystubs']['total_paystubs']}", MessageLevel.INFO)
+                cli.print(f"Total Gross Income: ${stats['paystubs']['total_gross']:,.2f}", MessageLevel.INFO)
+                cli.print(f"Total Net Income: ${stats['paystubs']['total_net']:,.2f}", MessageLevel.INFO)
+                cli.print(f"Average Net Pay: ${stats['paystubs']['average_net']:,.2f}", MessageLevel.INFO)
+                if stats['paystubs']['first_pay_date']:
+                    cli.print(f"Pay Period: {stats['paystubs']['first_pay_date']} to {stats['paystubs']['last_pay_date']}", MessageLevel.INFO)
+                if stats['paystubs']['employers']:
+                    cli.print(f"Employers: {', '.join([e['name'] for e in stats['paystubs']['employers']])}", MessageLevel.INFO)
             
             # Parse date range if provided
             date_range = None

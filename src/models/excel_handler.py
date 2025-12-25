@@ -117,3 +117,4 @@ class ExcelHandler:
             print(f"Error saving sanitized Excel to {output_path}: {e}")
             return False
 
+

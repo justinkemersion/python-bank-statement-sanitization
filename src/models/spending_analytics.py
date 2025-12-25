@@ -349,4 +349,167 @@ class SpendingAnalytics:
         except Exception as e:
             print(f"Error generating spending report: {e}")
             return False
+    
+    def get_income_summary(self, year: Optional[int] = None) -> Dict[str, Any]:
+        """Get income summary from paystubs.
+        
+        Args:
+            year: Optional year to filter (default: all years)
+            
+        Returns:
+            Dictionary with income statistics
+        """
+        cursor = self.conn.cursor()
+        
+        query = """
+            SELECT 
+                COUNT(*) as count,
+                SUM(gross_pay) as total_gross,
+                SUM(net_pay) as total_net,
+                SUM(total_deductions) as total_deductions,
+                AVG(gross_pay) as avg_gross,
+                AVG(net_pay) as avg_net,
+                MIN(pay_date) as first_pay,
+                MAX(pay_date) as last_pay
+            FROM paystubs
+            WHERE gross_pay IS NOT NULL
+        """
+        
+        params = []
+        if year:
+            query += " AND strftime('%Y', pay_date) = ?"
+            params.append(str(year))
+        
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        
+        if not row or row[0] == 0:
+            return {
+                'count': 0,
+                'total_gross': 0,
+                'total_net': 0,
+                'total_deductions': 0,
+                'average_gross': 0,
+                'average_net': 0,
+                'first_pay_date': None,
+                'last_pay_date': None
+            }
+        
+        return {
+            'count': row[0],
+            'total_gross': row[1] or 0,
+            'total_net': row[2] or 0,
+            'total_deductions': row[3] or 0,
+            'average_gross': row[4] or 0,
+            'average_net': row[5] or 0,
+            'first_pay_date': row[6],
+            'last_pay_date': row[7]
+        }
+    
+    def get_monthly_income(self, year: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Get monthly income breakdown.
+        
+        Args:
+            year: Optional year to filter
+            
+        Returns:
+            List of monthly income summaries
+        """
+        cursor = self.conn.cursor()
+        
+        query = """
+            SELECT 
+                strftime('%Y-%m', pay_date) as month,
+                COUNT(*) as count,
+                SUM(gross_pay) as total_gross,
+                SUM(net_pay) as total_net,
+                AVG(gross_pay) as avg_gross,
+                AVG(net_pay) as avg_net
+            FROM paystubs
+            WHERE pay_date IS NOT NULL
+        """
+        
+        params = []
+        if year:
+            query += " AND strftime('%Y', pay_date) = ?"
+            params.append(str(year))
+        
+        query += " GROUP BY month ORDER BY month"
+        
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        
+        monthly_income = []
+        for row in rows:
+            monthly_income.append({
+                'month': row[0],
+                'paystub_count': row[1],
+                'total_gross': row[2] or 0,
+                'total_net': row[3] or 0,
+                'average_gross': row[4] or 0,
+                'average_net': row[5] or 0
+            })
+        
+        return monthly_income
+    
+    def get_income_vs_spending(self, year: Optional[int] = None) -> Dict[str, Any]:
+        """Compare income vs spending for financial health analysis.
+        
+        Args:
+            year: Optional year to filter
+            
+        Returns:
+            Dictionary with income, spending, and savings analysis
+        """
+        income_summary = self.get_income_summary(year)
+        monthly_income = self.get_monthly_income(year)
+        monthly_spending = self.get_monthly_summary(year)
+        
+        # Calculate totals
+        total_income = income_summary['total_net']
+        total_spending = sum(abs(m['total_spending']) for m in monthly_spending)
+        
+        # Calculate monthly averages
+        avg_monthly_income = income_summary['average_net'] * (income_summary['count'] / len(monthly_income) if monthly_income else 1)
+        avg_monthly_spending = total_spending / len(monthly_spending) if monthly_spending else 0
+        
+        # Calculate savings
+        net_savings = total_income - total_spending
+        savings_rate = (net_savings / total_income * 100) if total_income > 0 else 0
+        
+        # Match months for detailed comparison
+        monthly_comparison = []
+        income_by_month = {m['month']: m for m in monthly_income}
+        spending_by_month = {m['month']: m for m in monthly_spending}
+        
+        all_months = sorted(set(list(income_by_month.keys()) + list(spending_by_month.keys())))
+        
+        for month in all_months:
+            income_data = income_by_month.get(month, {'total_net': 0})
+            spending_data = spending_by_month.get(month, {'total_spending': 0})
+            
+            month_income = income_data['total_net']
+            month_spending = abs(spending_data['total_spending'])
+            month_savings = month_income - month_spending
+            month_savings_rate = (month_savings / month_income * 100) if month_income > 0 else 0
+            
+            monthly_comparison.append({
+                'month': month,
+                'income': month_income,
+                'spending': month_spending,
+                'savings': month_savings,
+                'savings_rate': month_savings_rate
+            })
+        
+        return {
+            'total_income': total_income,
+            'total_spending': total_spending,
+            'net_savings': net_savings,
+            'savings_rate': savings_rate,
+            'average_monthly_income': avg_monthly_income,
+            'average_monthly_spending': avg_monthly_spending,
+            'average_monthly_savings': avg_monthly_income - avg_monthly_spending,
+            'monthly_comparison': monthly_comparison
+        }
+
 

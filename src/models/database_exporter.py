@@ -12,6 +12,7 @@ import re
 
 from src.models.transaction_categorizer import TransactionCategorizer
 from src.models.merchant_extractor import MerchantExtractor
+from src.models.paystub_extractor import PaystubExtractor
 
 
 class DatabaseExporter:
@@ -27,6 +28,8 @@ class DatabaseExporter:
         self.conn = None
         self.categorizer = TransactionCategorizer()
         self.merchant_extractor = MerchantExtractor()
+        self.paystub_extractor = PaystubExtractor()
+        self.paystub_extractor = PaystubExtractor()
     
     def connect(self):
         """Connect to the database."""
@@ -107,6 +110,33 @@ class DatabaseExporter:
             )
         """)
         
+        # Paystubs table - store income/payroll data
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS paystubs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_file TEXT NOT NULL,
+                pay_date TEXT,
+                pay_period_start TEXT,
+                pay_period_end TEXT,
+                employer_name TEXT,
+                gross_pay REAL,
+                regular_hours REAL,
+                overtime_hours REAL,
+                regular_rate REAL,
+                overtime_rate REAL,
+                bonus REAL,
+                commission REAL,
+                deductions_json TEXT,
+                total_deductions REAL,
+                net_pay REAL,
+                ytd_gross REAL,
+                ytd_net REAL,
+                ytd_taxes REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         # Create indexes for common queries
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_transaction_date ON transactions(transaction_date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_amount ON transactions(amount)")
@@ -114,6 +144,9 @@ class DatabaseExporter:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_source_file ON transactions(source_file)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_merchant_name ON transactions(merchant_name)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_is_recurring ON transactions(is_recurring)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_paystub_date ON paystubs(pay_date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_paystub_source ON paystubs(source_file)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_paystub_employer ON paystubs(employer_name)")
         
         self.conn.commit()
     
@@ -426,6 +459,10 @@ class DatabaseExporter:
         # Files imported
         cursor.execute("SELECT COUNT(*) FROM imported_files")
         stats['files_imported'] = cursor.fetchone()[0]
+        
+        # Paystub statistics
+        paystub_stats = self.get_paystub_statistics()
+        stats['paystubs'] = paystub_stats
         
         return stats
     
@@ -899,4 +936,153 @@ class DatabaseExporter:
             })
         
         return result
+    
+    def extract_paystub_from_text(self, text: str, source_file: str) -> Optional[Dict[str, Any]]:
+        """Extract paystub data from sanitized text.
+        
+        Args:
+            text: Sanitized text content
+            source_file: Source file name
+            
+        Returns:
+            Dictionary with paystub data, or None if not a paystub
+        """
+        # Check if this is a paystub
+        if not self.paystub_extractor.is_paystub(text):
+            return None
+        
+        # Extract paystub data
+        return self.paystub_extractor.extract(text, source_file)
+    
+    def insert_paystub(self, paystub: Dict[str, Any], skip_duplicates: bool = True) -> bool:
+        """Insert a paystub into the database.
+        
+        Args:
+            paystub: Dictionary with paystub data
+            skip_duplicates: If True, skip if paystub already exists (same pay_date and source_file)
+            
+        Returns:
+            True if inserted, False if skipped or failed
+        """
+        if not paystub:
+            return False
+        
+        cursor = self.conn.cursor()
+        
+        # Check for duplicates if enabled
+        if skip_duplicates:
+            pay_date = paystub.get('pay_date')
+            source_file = paystub.get('source_file')
+            if pay_date and source_file:
+                cursor.execute("""
+                    SELECT COUNT(*) FROM paystubs
+                    WHERE pay_date = ? AND source_file = ?
+                """, (pay_date, source_file))
+                count = cursor.fetchone()[0]
+                if count > 0:
+                    return False  # Duplicate found
+        
+        # Insert paystub
+        cursor.execute("""
+            INSERT INTO paystubs 
+            (source_file, pay_date, pay_period_start, pay_period_end, employer_name,
+             gross_pay, regular_hours, overtime_hours, regular_rate, overtime_rate,
+             bonus, commission, deductions_json, total_deductions, net_pay,
+             ytd_gross, ytd_net, ytd_taxes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            paystub.get('source_file'),
+            paystub.get('pay_date'),
+            paystub.get('pay_period_start'),
+            paystub.get('pay_period_end'),
+            paystub.get('employer_name'),
+            paystub.get('gross_pay'),
+            paystub.get('regular_hours'),
+            paystub.get('overtime_hours'),
+            paystub.get('regular_rate'),
+            paystub.get('overtime_rate'),
+            paystub.get('bonus'),
+            paystub.get('commission'),
+            paystub.get('deductions_json'),
+            paystub.get('total_deductions'),
+            paystub.get('net_pay'),
+            paystub.get('ytd_gross'),
+            paystub.get('ytd_net'),
+            paystub.get('ytd_taxes'),
+        ))
+        
+        self.conn.commit()
+        return True
+    
+    def get_paystub_statistics(self) -> Dict[str, Any]:
+        """Get statistics about paystubs in the database.
+        
+        Returns:
+            Dictionary with paystub statistics
+        """
+        cursor = self.conn.cursor()
+        
+        # Total paystubs
+        cursor.execute("SELECT COUNT(*) FROM paystubs")
+        total_count = cursor.fetchone()[0]
+        
+        if total_count == 0:
+            return {
+                'total_paystubs': 0,
+                'total_gross': 0,
+                'total_net': 0,
+                'average_gross': 0,
+                'average_net': 0,
+                'total_taxes': 0,
+                'employers': []
+            }
+        
+        # Sum totals
+        cursor.execute("""
+            SELECT 
+                SUM(gross_pay) as total_gross,
+                SUM(net_pay) as total_net,
+                SUM(total_deductions) as total_deductions,
+                AVG(gross_pay) as avg_gross,
+                AVG(net_pay) as avg_net
+            FROM paystubs
+            WHERE gross_pay IS NOT NULL
+        """)
+        row = cursor.fetchone()
+        total_gross = row[0] or 0
+        total_net = row[1] or 0
+        total_deductions = row[2] or 0
+        avg_gross = row[3] or 0
+        avg_net = row[4] or 0
+        
+        # Get date range
+        cursor.execute("""
+            SELECT MIN(pay_date) as first_pay, MAX(pay_date) as last_pay
+            FROM paystubs
+            WHERE pay_date IS NOT NULL
+        """)
+        date_row = cursor.fetchone()
+        first_pay = date_row[0] if date_row else None
+        last_pay = date_row[1] if date_row else None
+        
+        # Get unique employers
+        cursor.execute("""
+            SELECT DISTINCT employer_name, COUNT(*) as count
+            FROM paystubs
+            WHERE employer_name IS NOT NULL
+            GROUP BY employer_name
+        """)
+        employers = [{'name': row[0], 'count': row[1]} for row in cursor.fetchall()]
+        
+        return {
+            'total_paystubs': total_count,
+            'total_gross': total_gross,
+            'total_net': total_net,
+            'total_deductions': total_deductions,
+            'average_gross': avg_gross,
+            'average_net': avg_net,
+            'first_pay_date': first_pay,
+            'last_pay_date': last_pay,
+            'employers': employers
+        }
 
