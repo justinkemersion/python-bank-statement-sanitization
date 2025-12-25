@@ -48,7 +48,9 @@ def main():
                 print(f"Error: Failed to extract text from {file_path}. Skipping.")
                 continue
             sanitized_text = sanitizer.sanitize_text(text_content)
-            pdf_handler.create_sanitized_pdf(file_path, sanitized_text, sanitized_file_path)
+            if not pdf_handler.create_sanitized_pdf(file_path, sanitized_text, sanitized_file_path):
+                print(f"Error: Failed to create sanitized PDF: {sanitized_file_path}")
+                continue
         elif ext.lower() == '.txt':
             text_content = txt_handler.read_text(file_path)
             if text_content is None:
