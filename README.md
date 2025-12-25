@@ -26,13 +26,13 @@ This project aims to develop a robust Python application for sanitizing sensitiv
 - **Multiple Export Formats:** Export to CSV (for NotebookLM/AI tools), JSON (for programmatic access), or summary reports.
 - **Incremental Import:** Add new statements to existing database without duplicates.
 
-## Architecture (Planned)
+## Architecture
 
-The application will be designed with modularity in mind, loosely following a Model-View-Controller (MVC) pattern to facilitate future expansion and maintenance.
+The application is designed with modularity in mind, following a Model-View-Controller (MVC) pattern:
 
-- **Model:** Handles the core logic of reading, parsing, and sanitizing bank statement data. This will include modules for different file types (e.g., `pdf_parser.py`, `txt_parser.py`) and a `sanitizer.py` module for redaction.
-- **View:** (Implicit for a CLI application) Handles how information is presented to the user, such as progress updates and confirmation messages.
-- **Controller:** Manages the overall flow of the application, including CLI argument parsing, file discovery, orchestrating the sanitization process, and file saving. This will likely be the main script (`main.py`).
+- **Model:** Handles the core logic of reading, parsing, and sanitizing bank statement data. Includes modules for different file types (`pdf_handler.py`, `txt_handler.py`, `csv_handler.py`, `excel_handler.py`), sanitization (`sanitizer.py`), categorization (`transaction_categorizer.py`), merchant extraction (`merchant_extractor.py`), and database operations (`database_exporter.py`, `spending_analytics.py`).
+- **View:** Manages command-line interface presentation (`cli.py`) with colored output, progress bars, and formatted messages.
+- **Controller:** Orchestrates the overall flow through the main entry point (`sanitize.py`), including CLI argument parsing, file discovery, and workflow management.
 
 ## Getting Started
 
@@ -45,7 +45,13 @@ The application will be designed with modularity in mind, loosely following a Mo
 
 1. **Clone the repository:**
    ```bash
-   git clone <your-repo-url>
+   git clone git@github.com:justinkemersion/python-bank-statement-sanitization.git
+   cd python-bank-statement-sanitization
+   ```
+   
+   Or using HTTPS:
+   ```bash
+   git clone https://github.com/justinkemersion/python-bank-statement-sanitization.git
    cd python-bank-statement-sanitization
    ```
 
@@ -79,7 +85,12 @@ If you're setting up this project for the first time with an existing remote rep
 
 2. **Add the remote repository:**
    ```bash
-   git remote add origin <your-repo-url>
+   git remote add origin git@github.com:justinkemersion/python-bank-statement-sanitization.git
+   ```
+   
+   Or using HTTPS:
+   ```bash
+   git remote add origin https://github.com/justinkemersion/python-bank-statement-sanitization.git
    ```
 
 3. **Verify the remote:**
@@ -160,6 +171,12 @@ python sanitize.py ./statements --dry-run
 - `--list-recurring`: List all recurring transactions grouped by merchant
 - `--limit <number>`: Limit number of results
 
+**Spending Analytics Options:**
+- `--spending-report <path>`: Generate comprehensive spending analysis report
+- `--top-categories <N>`: Show top N spending categories
+- `--top-merchants <N>`: Show top N merchants by spending
+- `--year <YYYY>`: Filter spending reports by specific year
+
 **Examples:**
 
 **Basic Sanitization:**
@@ -205,6 +222,21 @@ python sanitize.py --query-db finances.db --recurring --date-range 2024-01-01:20
 
 # Complex query: Groceries over $100
 python sanitize.py --query-db finances.db --category "Groceries" --min-amount 100
+```
+
+**Spending Analytics:**
+```bash
+# Generate comprehensive spending report
+python sanitize.py --query-db finances.db --spending-report spending_2024.txt
+
+# Show top 10 spending categories
+python sanitize.py --query-db finances.db --top-categories 10
+
+# Show top 20 merchants
+python sanitize.py --query-db finances.db --top-merchants 20
+
+# Spending report for specific year
+python sanitize.py --query-db finances.db --spending-report report.txt --year 2024
 ```
 
 **Note:** The old `src/main.py` entry point still works but is deprecated. Use `sanitize.py` for the enhanced CLI experience.
