@@ -1075,6 +1075,140 @@ class DatabaseExporter:
         
         self.conn.commit()
     
+    def _detect_recurring_income(self):
+        """Detect and track recurring income sources.
+        
+        Income is considered recurring if:
+        - Positive amount (credit)
+        - Same merchant/description appears multiple times
+        - Similar amount (within 10% variance for income)
+        - Regular intervals (monthly, bi-weekly, etc.)
+        """
+        cursor = self.conn.cursor()
+        
+        # Find positive transactions (income) with same merchant/description
+        cursor.execute("""
+            SELECT 
+                COALESCE(merchant_name, description) as income_source,
+                COUNT(*) as count,
+                AVG(amount) as avg_amount,
+                MIN(transaction_date) as first_date,
+                MAX(transaction_date) as last_date,
+                SUM(amount) as total_amount
+            FROM transactions
+            WHERE amount > 0
+            AND (merchant_name IS NOT NULL OR description IS NOT NULL)
+            GROUP BY income_source
+            HAVING count >= 2
+        """)
+        
+        income_sources = cursor.fetchall()
+        
+        recurring_income = []
+        for row in income_sources:
+            income_source = row[0]
+            count = row[1]
+            avg_amount = row[2]
+            first_date = row[3]
+            last_date = row[4]
+            total_amount = row[5]
+            
+            # Check if amounts are similar (within 10% variance)
+            cursor.execute("""
+                SELECT amount
+                FROM transactions
+                WHERE amount > 0
+                AND (COALESCE(merchant_name, description) = ?)
+                ORDER BY transaction_date
+            """, (income_source,))
+            
+            amounts = [r[0] for r in cursor.fetchall()]
+            if len(amounts) >= 2:
+                # Check variance
+                variance = max(amounts) / min(amounts) if min(amounts) > 0 else 0
+                if variance <= 1.10:  # Within 10% variance
+                    recurring_income.append({
+                        'income_source': income_source,
+                        'count': count,
+                        'avg_amount': avg_amount,
+                        'total_amount': total_amount,
+                        'first_date': first_date,
+                        'last_date': last_date,
+                        'frequency': 'monthly' if count >= 3 else 'irregular',
+                    })
+        
+        return recurring_income
+    
+    def get_recurring_income(self) -> List[Dict[str, Any]]:
+        """Get all recurring income sources.
+        
+        Returns:
+            List of recurring income dictionaries
+        """
+        return self._detect_recurring_income()
+    
+    def get_income_summary(self, year: Optional[int] = None) -> Dict[str, Any]:
+        """Get income summary statistics.
+        
+        Args:
+            year: Optional year to filter by
+            
+        Returns:
+            Dictionary with income statistics
+        """
+        cursor = self.conn.cursor()
+        
+        query = """
+            SELECT 
+                SUM(amount) as total_income,
+                COUNT(*) as transaction_count,
+                AVG(amount) as avg_income,
+                MIN(transaction_date) as first_income,
+                MAX(transaction_date) as last_income
+            FROM transactions
+            WHERE amount > 0
+        """
+        
+        params = []
+        if year:
+            query += " AND strftime('%Y', transaction_date) = ?"
+            params.append(str(year))
+        
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        
+        # Get income from paystubs
+        paystub_query = """
+            SELECT 
+                SUM(gross_pay) as total_paystub_income,
+                COUNT(*) as paystub_count
+            FROM paystubs
+            WHERE 1=1
+        """
+        
+        paystub_params = []
+        if year:
+            paystub_query += " AND strftime('%Y', pay_date) = ?"
+            paystub_params.append(str(year))
+        
+        cursor.execute(paystub_query, paystub_params)
+        paystub_row = cursor.fetchone()
+        
+        # Get recurring income
+        recurring_income = self._detect_recurring_income()
+        
+        return {
+            'total_income': row[0] or 0,
+            'transaction_count': row[1] or 0,
+            'avg_income': row[2] or 0,
+            'first_income': row[3],
+            'last_income': row[4],
+            'paystub_income': paystub_row[0] or 0,
+            'paystub_count': paystub_row[1] or 0,
+            'recurring_income': recurring_income,
+            'recurring_income_total': sum(r['total_amount'] for r in recurring_income),
+        }
+    
     def update_bills_from_recurring_transactions(self):
         """Update bills table from recurring transactions.
         

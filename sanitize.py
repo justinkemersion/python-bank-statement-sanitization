@@ -988,6 +988,77 @@ def handle_query_mode(args, cli: CLIView):
         db_exporter.close()
         return
     
+    # Handle show income
+    if args.show_income:
+        cli.print_header("Income Summary")
+        income_summary = db_exporter.get_income_summary()
+        recurring_income = db_exporter.get_recurring_income()
+        
+        cli.print(f"Total Income (Transactions): ${income_summary.get('total_income', 0):,.2f}", MessageLevel.INFO)
+        cli.print(f"Total Income (Paystubs): ${income_summary.get('paystub_income', 0):,.2f}", MessageLevel.INFO)
+        cli.print(f"Combined Total: ${income_summary.get('total_income', 0) + income_summary.get('paystub_income', 0):,.2f}", MessageLevel.SUCCESS)
+        cli.print("", MessageLevel.INFO)
+        
+        if recurring_income:
+            cli.print_header("Recurring Income Sources")
+            total_recurring = sum(r['total_amount'] for r in recurring_income)
+            cli.print(f"Total Recurring Income: ${total_recurring:,.2f}", MessageLevel.INFO)
+            cli.print("", MessageLevel.INFO)
+            
+            for i, income in enumerate(recurring_income, 1):
+                cli.print(f"{i}. {income.get('income_source', 'Unknown'):<40} "
+                         f"${income.get('avg_amount', 0):>10,.2f}/mo  "
+                         f"({income.get('count', 0)} payments, ${income.get('total_amount', 0):,.2f} total)", MessageLevel.INFO)
+                if income.get('first_date') and income.get('last_date'):
+                    cli.print(f"   Period: {income.get('first_date')} to {income.get('last_date')}", MessageLevel.DEBUG)
+        else:
+            cli.print("No recurring income sources detected.", MessageLevel.INFO)
+        
+        db_exporter.close()
+        return
+    
+    # Handle income trends
+    if args.income_trends:
+        cli.print_header("Income Trends")
+        from datetime import datetime
+        current_year = datetime.now().year
+        
+        # Get income by month for current year
+        cursor = db_exporter.conn.cursor()
+        cursor.execute("""
+            SELECT 
+                strftime('%Y-%m', transaction_date) as month,
+                SUM(amount) as monthly_income,
+                COUNT(*) as transaction_count
+            FROM transactions
+            WHERE amount > 0
+            AND strftime('%Y', transaction_date) = ?
+            GROUP BY month
+            ORDER BY month
+        """, (str(current_year),))
+        
+        monthly_data = cursor.fetchall()
+        
+        if monthly_data:
+            cli.print(f"Income by Month ({current_year}):", MessageLevel.INFO)
+            cli.print("", MessageLevel.INFO)
+            total = 0
+            for row in monthly_data:
+                month = row[0]
+                income = row[1] or 0
+                count = row[2]
+                total += income
+                cli.print(f"{month:<10} ${income:>12,.2f}  ({count} transactions)", MessageLevel.INFO)
+            
+            cli.print("", MessageLevel.INFO)
+            cli.print(f"Year Total: ${total:,.2f}", MessageLevel.SUCCESS)
+            cli.print(f"Monthly Average: ${total / len(monthly_data):,.2f}", MessageLevel.INFO)
+        else:
+            cli.print(f"No income data found for {current_year}.", MessageLevel.INFO)
+        
+        db_exporter.close()
+        return
+    
     # Handle list recurring transactions
     if args.list_recurring:
         cli.print_header("Recurring Transactions")
@@ -1075,7 +1146,7 @@ def main():
     cli = CLIView(verbose=args.verbose, quiet=args.quiet, dry_run=args.dry_run)
     
     # Handle query mode (if --query-db is specified)
-    if args.query_db or args.list_recurring or args.spending_report or args.top_categories or args.top_merchants or args.debt_payoff or args.show_debts or args.show_bills or args.upcoming_bills or args.show_investments or args.show_holdings:
+    if args.query_db or args.list_recurring or args.spending_report or args.top_categories or args.top_merchants or args.debt_payoff or args.show_debts or args.show_bills or args.upcoming_bills or args.show_investments or args.show_holdings or args.show_income or args.income_trends or args.validate_data or args.check_duplicates:
         handle_query_mode(args, cli)
         sys.exit(0)
     
