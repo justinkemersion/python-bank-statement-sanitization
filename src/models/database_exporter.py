@@ -256,18 +256,76 @@ class DatabaseExporter:
         rows = df.to_dict('records')
         return self.extract_transactions_from_csv(rows, source_file)
     
-    def insert_transactions(self, transactions: List[Dict[str, Any]]):
+    def _is_duplicate_transaction(self, transaction: Dict[str, Any], cursor: sqlite3.Cursor) -> bool:
+        """Check if a transaction already exists in the database.
+        
+        A transaction is considered a duplicate if it has:
+        - Same date
+        - Same amount (within 0.01 tolerance for floating point)
+        - Same merchant name (if available) OR similar description
+        
+        Args:
+            transaction: Transaction dictionary to check
+            cursor: Database cursor
+            
+        Returns:
+            bool: True if duplicate found, False otherwise
+        """
+        date = transaction.get('transaction_date')
+        amount = transaction.get('amount')
+        merchant = transaction.get('merchant_name')
+        description = transaction.get('description')
+        
+        if not date or amount is None:
+            return False  # Can't match without date/amount
+        
+        # Build query to find potential duplicates
+        query = """
+            SELECT COUNT(*) FROM transactions
+            WHERE transaction_date = ? 
+            AND ABS(amount - ?) < 0.01
+        """
+        params = [date, amount]
+        
+        # If we have a merchant name, use it for matching (more reliable)
+        if merchant:
+            query += " AND merchant_name = ?"
+            params.append(merchant)
+        # Otherwise, try to match on description (first 50 chars for fuzzy matching)
+        elif description:
+            query += " AND description LIKE ?"
+            params.append(f"{description[:50]}%")
+        else:
+            # No merchant or description - can't reliably detect duplicate
+            return False
+        
+        cursor.execute(query, params)
+        count = cursor.fetchone()[0]
+        return count > 0
+    
+    def insert_transactions(self, transactions: List[Dict[str, Any]], skip_duplicates: bool = True) -> Dict[str, int]:
         """Insert transactions into the database.
         
         Args:
             transactions: List of transaction dictionaries
+            skip_duplicates: If True, skip duplicate transactions (default: True)
+            
+        Returns:
+            Dictionary with 'inserted' and 'skipped' counts
         """
         if not transactions:
-            return
+            return {'inserted': 0, 'skipped': 0}
         
         cursor = self.conn.cursor()
+        inserted_count = 0
+        skipped_count = 0
         
         for transaction in transactions:
+            # Check for duplicates if enabled
+            if skip_duplicates and self._is_duplicate_transaction(transaction, cursor):
+                skipped_count += 1
+                continue
+            
             cursor.execute("""
                 INSERT INTO transactions 
                 (source_file, transaction_date, amount, description, merchant_name, category, 
@@ -286,11 +344,15 @@ class DatabaseExporter:
                 transaction.get('notes'),
                 transaction.get('is_recurring', 0)
             ))
+            inserted_count += 1
         
         self.conn.commit()
         
         # After inserting, detect and mark recurring transactions
-        self._detect_recurring_transactions()
+        if inserted_count > 0:
+            self._detect_recurring_transactions()
+        
+        return {'inserted': inserted_count, 'skipped': skipped_count}
     
     def is_file_imported(self, file_path: str) -> bool:
         """Check if a file has already been imported.

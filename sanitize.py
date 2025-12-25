@@ -414,10 +414,12 @@ def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_
                             transactions = []
                         
                         if transactions:
-                            db_exporter.insert_transactions(transactions)
-                            db_exporter.record_file_import(file_path, ext.lower()[1:], len(transactions))
+                            result = db_exporter.insert_transactions(transactions, skip_duplicates=True)
+                            db_exporter.record_file_import(file_path, ext.lower()[1:], result['inserted'])
                             if cli.verbose:
-                                cli.print(f"  Exported {len(transactions)} transactions to database", MessageLevel.DEBUG)
+                                cli.print(f"  Exported {result['inserted']} transactions to database", MessageLevel.DEBUG)
+                                if result['skipped'] > 0:
+                                    cli.print(f"  Skipped {result['skipped']} duplicate transactions", MessageLevel.DEBUG)
                 except Exception as e:
                     if cli.verbose:
                         cli.print(f"  Warning: Failed to export to database: {e}", MessageLevel.WARNING)
@@ -622,10 +624,12 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metada
                                 transactions = []
                             
                             if transactions:
-                                db_exporter.insert_transactions(transactions)
-                                db_exporter.record_file_import(file_path, ext.lower()[1:], len(transactions))
+                                result = db_exporter.insert_transactions(transactions, skip_duplicates=True)
+                                db_exporter.record_file_import(file_path, ext.lower()[1:], result['inserted'])
                                 if cli.verbose:
-                                    cli.print(f"  Exported {len(transactions)} transactions to database", MessageLevel.DEBUG)
+                                    cli.print(f"  Exported {result['inserted']} transactions to database", MessageLevel.DEBUG)
+                                    if result['skipped'] > 0:
+                                        cli.print(f"  Skipped {result['skipped']} duplicate transactions", MessageLevel.DEBUG)
                     except Exception as e:
                         if cli.verbose:
                             cli.print(f"  Warning: Failed to export to database: {e}", MessageLevel.WARNING)
