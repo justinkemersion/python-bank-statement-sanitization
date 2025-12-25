@@ -1,0 +1,64 @@
+# Bank Statement Sanitizer Configuration File
+# Copy this file to config.yaml and customize as needed
+
+# Default output directory for sanitized files
+output_dir: null  # null = same as input directory
+
+# Metadata settings
+include_metadata: true  # Add AI-friendly metadata headers to sanitized files
+
+# Database settings
+default_database: "finances.db"  # Default database file name
+
+# File processing settings
+skip_sanitized: true  # Skip files that have already been sanitized
+supported_extensions:
+  - .pdf
+  - .txt
+  - .csv
+  - .xlsx
+  - .xls
+
+# Transaction categorization
+# Custom category rules (merchant name patterns -> category)
+custom_categories:
+  # Example:
+  # "AMAZON": "Online Shopping"
+  # "STARBUCKS": "Coffee & Dining"
+
+# Merchant name mappings
+# Custom merchant name cleaning (raw description -> clean name)
+custom_merchants:
+  # Example:
+  # "AMZN MKTP US*": "Amazon"
+  # "SQ *MERCHANT": "Square Payment"
+
+# Bank/issuer detection
+# Custom bank name patterns
+custom_banks:
+  # Example:
+  # "SCHWAB": "Charles Schwab"
+  # "AMEX": "American Express"
+
+# Account type detection
+# Custom account type patterns
+custom_account_types:
+  # Example:
+  # "CHECKING": "checking"
+  # "SAVINGS": "savings"
+
+# Export settings
+export_settings:
+  csv:
+    include_metadata: true
+    date_format: "%Y-%m-%d"
+  json:
+    indent: 2
+    ensure_ascii: false
+
+# Logging settings
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  verbose: false
+  quiet: false
+
