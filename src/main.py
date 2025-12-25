@@ -44,12 +44,20 @@ def main():
 
         if ext.lower() == '.pdf':
             text_content = pdf_handler.extract_text(file_path)
+            if text_content is None:
+                print(f"Error: Failed to extract text from {file_path}. Skipping.")
+                continue
             sanitized_text = sanitizer.sanitize_text(text_content)
             pdf_handler.create_sanitized_pdf(file_path, sanitized_text, sanitized_file_path)
         elif ext.lower() == '.txt':
             text_content = txt_handler.read_text(file_path)
+            if text_content is None:
+                print(f"Error: Failed to read text from {file_path}. Skipping.")
+                continue
             sanitized_text = sanitizer.sanitize_text(text_content)
-            txt_handler.save_sanitized_text(sanitized_text, sanitized_file_path)
+            if not txt_handler.save_sanitized_text(sanitized_text, sanitized_file_path):
+                print(f"Error: Failed to save sanitized file: {sanitized_file_path}")
+                continue
         else:
             print(f"Skipping unsupported file type: {file_path}")
 
