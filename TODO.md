@@ -44,7 +44,22 @@
 
 ---
 
-### 4. Financial Goals Tracking
+### 4. Cryptocurrency/Bitcoin Tracking
+**Priority: MEDIUM** | **Effort: Medium** | **Value: High**
+
+- Extract cryptocurrency transactions from statements/exchanges
+- Track Bitcoin, Ethereum, and other crypto holdings
+- Calculate crypto gains/losses for tax purposes
+- Track exchange transactions (Coinbase, Binance, etc.)
+- Portfolio value tracking for crypto assets
+- Integration with investment accounts
+- **CLI:** `--show-crypto`, `--crypto-performance`, `--crypto-tax`
+
+**Why:** Many people have crypto assets. Need to track for taxes and portfolio analysis.
+
+---
+
+### 5. Financial Goals Tracking
 **Priority: MEDIUM** | **Effort: Medium** | **Value: High**
 
 - Set financial goals (debt payoff, savings, investment targets)
@@ -59,7 +74,7 @@
 
 ## 🟡 Medium Priority (Enhanced Analysis & Features)
 
-### 5. Cash Flow Forecasting
+### 6. Cash Flow Forecasting
 **Priority: MEDIUM** | **Effort: Medium** | **Value: Medium**
 
 - Predict future cash flow based on historical patterns
@@ -72,7 +87,7 @@
 
 ---
 
-### 6. Investment Performance Tracking
+### 7. Investment Performance Tracking
 **Priority: MEDIUM** | **Effort: High** | **Value: High**
 
 - Track investment returns over time
@@ -86,7 +101,7 @@
 
 ---
 
-### 7. Expense Receipt Matching
+### 8. Expense Receipt Matching
 **Priority: MEDIUM** | **Effort: High** | **Value: Medium**
 
 - Match transactions to uploaded receipts
@@ -99,7 +114,7 @@
 
 ---
 
-### 8. Multi-Currency Support
+### 9. Multi-Currency Support
 **Priority: MEDIUM** | **Effort: Medium** | **Value: Low-Medium**
 
 - Detect and handle foreign currency transactions
@@ -111,7 +126,7 @@
 
 ---
 
-### 9. Enhanced PDF Parsing (OCR)
+### 10. Enhanced PDF Parsing (OCR)
 **Priority: MEDIUM** | **Effort: Medium** | **Value: Medium**
 
 - OCR for scanned PDF statements
@@ -123,7 +138,7 @@
 
 ---
 
-### 10. Data Validation & Error Handling
+### 11. Data Validation & Error Handling
 **Priority: MEDIUM** | **Effort: Low-Medium** | **Value: Medium**
 
 - Better error messages and validation
@@ -138,7 +153,7 @@
 
 ## 🟢 Low Priority (Nice-to-Have & Polish)
 
-### 11. Web Dashboard/Interface
+### 12. Web Dashboard/Interface
 **Priority: LOW** | **Effort: High** | **Value: Medium**
 
 - Web-based dashboard for viewing data
@@ -151,7 +166,7 @@
 
 ---
 
-### 12. Email Integration
+### 13. Email Integration
 **Priority: LOW** | **Effort: High** | **Value: Medium**
 
 - Auto-import statements from email
@@ -163,7 +178,7 @@
 
 ---
 
-### 13. Export to Accounting Software
+### 14. Export to Accounting Software
 **Priority: LOW** | **Effort: Medium** | **Value: Low-Medium**
 
 - Export to QuickBooks format
@@ -175,7 +190,7 @@
 
 ---
 
-### 14. Financial Health Score
+### 15. Financial Health Score
 **Priority: LOW** | **Effort: Medium** | **Value: Low-Medium**
 
 - Calculate financial health score
@@ -187,7 +202,7 @@
 
 ---
 
-### 15. API for Programmatic Access
+### 16. API for Programmatic Access
 **Priority: LOW** | **Effort: Medium** | **Value: Low**
 
 - REST API for database queries
@@ -199,7 +214,7 @@
 
 ---
 
-### 16. Mobile App
+### 17. Mobile App
 **Priority: LOW** | **Effort: Very High** | **Value: Low**
 
 - Mobile app for viewing data
@@ -213,7 +228,7 @@
 
 ## 🔧 Technical Improvements
 
-### 17. Unit Tests & Test Coverage
+### 18. Unit Tests & Test Coverage
 **Priority: MEDIUM** | **Effort: Medium** | **Value: High**
 
 - Unit tests for all extractors
@@ -225,7 +240,7 @@
 
 ---
 
-### 18. Performance Optimizations
+### 19. Performance Optimizations
 **Priority: LOW** | **Effort: Medium** | **Value: Low**
 
 - Database query optimization
@@ -235,7 +250,7 @@
 
 ---
 
-### 19. Better Documentation
+### 20. Better Documentation
 **Priority: MEDIUM** | **Effort: Low** | **Value: Medium**
 
 - API documentation
@@ -246,7 +261,7 @@
 
 ---
 
-### 20. Configuration File Support
+### 21. Configuration File Support
 **Priority: LOW** | **Effort: Low** | **Value: Low**
 
 - YAML/JSON config file for defaults
@@ -264,6 +279,7 @@
 1. Tax Document Extraction (#1)
 2. Recurring Income Detection (#3)
 3. Tax Categorization & Reporting (#1)
+4. Cryptocurrency Tracking (#4) - For crypto tax reporting
 
 ### Phase 2: Budgeting & Planning
 4. Budget Tracking (#2)
@@ -291,9 +307,9 @@
 These can be implemented quickly and provide immediate value:
 
 1. **Recurring Income Detection** (#3) - Low effort, high value
-2. **Data Validation** (#10) - Low effort, improves reliability
-3. **Better Documentation** (#19) - Low effort, helps users
-4. **Configuration File** (#20) - Low effort, improves UX
+2. **Data Validation** (#11) - Low effort, improves reliability
+3. **Better Documentation** (#20) - Low effort, helps users
+4. **Configuration File** (#21) - Low effort, improves UX
 
 ---
 
