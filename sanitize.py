@@ -223,6 +223,23 @@ Examples:
         help="Show current debt balances (requires --query-db)"
     )
     
+    # Bill tracking arguments
+    parser.add_argument(
+        "--show-bills",
+        dest="show_bills",
+        action="store_true",
+        help="Show all recurring bills (requires --query-db)"
+    )
+    
+    parser.add_argument(
+        "--upcoming-bills",
+        dest="upcoming_bills",
+        type=int,
+        nargs='?',
+        const=30,
+        help="Show bills due in the next N days (default: 30, requires --query-db)"
+    )
+    
     parser.add_argument(
         "--version",
         action="version",
@@ -898,6 +915,51 @@ def handle_query_mode(args, cli: CLIView):
         db_exporter.close()
         return
     
+    # Handle show bills
+    if args.show_bills:
+        cli.print_header("Recurring Bills")
+        bills = db_exporter.get_all_bills()
+        
+        if not bills:
+            cli.print("No recurring bills found. Run transaction import to detect bills.", MessageLevel.INFO)
+        else:
+            total_monthly = sum(b.get('amount', 0) for b in bills)
+            cli.print(f"Total Monthly Bills: ${total_monthly:,.2f}", MessageLevel.INFO)
+            cli.print("", MessageLevel.INFO)
+            
+            for i, bill in enumerate(bills, 1):
+                cli.print(f"{i}. {bill.get('merchant_name', 'Unknown'):<30} ${bill.get('amount', 0):>10,.2f}/mo", MessageLevel.INFO)
+                if bill.get('category'):
+                    cli.print(f"   Category: {bill.get('category')}", MessageLevel.DEBUG)
+                if bill.get('last_paid_date'):
+                    cli.print(f"   Last Paid: {bill.get('last_paid_date')}", MessageLevel.DEBUG)
+                if bill.get('payment_count'):
+                    cli.print(f"   Payments: {bill.get('payment_count')}", MessageLevel.DEBUG)
+        
+        db_exporter.close()
+        return
+    
+    # Handle upcoming bills
+    if args.upcoming_bills is not None:
+        days = args.upcoming_bills
+        cli.print_header(f"Bills Due in Next {days} Days")
+        bills = db_exporter.get_upcoming_bills(days_ahead=days)
+        
+        if not bills:
+            cli.print(f"No bills due in the next {days} days.", MessageLevel.INFO)
+        else:
+            total_due = sum(b.get('amount', 0) for b in bills)
+            cli.print(f"Total Due: ${total_due:,.2f}", MessageLevel.INFO)
+            cli.print("", MessageLevel.INFO)
+            
+            for i, bill in enumerate(bills, 1):
+                due_date = bill.get('next_due_date') or bill.get('due_date') or 'Unknown'
+                cli.print(f"{i}. {bill.get('merchant_name', 'Unknown'):<30} "
+                         f"${bill.get('amount', 0):>10,.2f}  Due: {due_date}", MessageLevel.INFO)
+        
+        db_exporter.close()
+        return
+    
     # Handle list recurring transactions
     if args.list_recurring:
         cli.print_header("Recurring Transactions")
@@ -985,7 +1047,7 @@ def main():
     cli = CLIView(verbose=args.verbose, quiet=args.quiet, dry_run=args.dry_run)
     
     # Handle query mode (if --query-db is specified)
-    if args.query_db or args.list_recurring or args.spending_report or args.top_categories or args.top_merchants or args.debt_payoff or args.show_debts:
+    if args.query_db or args.list_recurring or args.spending_report or args.top_categories or args.top_merchants or args.debt_payoff or args.show_debts or args.show_bills or args.upcoming_bills:
         handle_query_mode(args, cli)
         sys.exit(0)
     

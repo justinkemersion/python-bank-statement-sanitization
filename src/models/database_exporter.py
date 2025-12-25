@@ -183,6 +183,30 @@ class DatabaseExporter:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_bank ON account_balances(bank_name)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_type ON account_balances(account_type)")
         
+        # Bills table - track recurring bills and payments
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bills (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                merchant_name TEXT NOT NULL,
+                category TEXT,
+                amount REAL,
+                due_date TEXT,
+                frequency TEXT,
+                is_active INTEGER DEFAULT 1,
+                last_paid_date TEXT,
+                next_due_date TEXT,
+                payment_count INTEGER DEFAULT 0,
+                total_paid REAL DEFAULT 0,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bill_merchant ON bills(merchant_name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bill_due_date ON bills(next_due_date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bill_active ON bills(is_active)")
+        
         self.conn.commit()
     
     def _detect_bank_name(self, text: str, source_file: str) -> Optional[str]:
@@ -588,6 +612,8 @@ class DatabaseExporter:
         # After inserting, detect and mark recurring transactions
         if inserted_count > 0:
             self._detect_recurring_transactions()
+            # Update bills table from recurring transactions
+            self.update_bills_from_recurring_transactions()
         
         return {'inserted': inserted_count, 'skipped': skipped_count}
     
@@ -916,6 +942,143 @@ class DatabaseExporter:
                 """, (merchant_name,))
         
         self.conn.commit()
+    
+    def update_bills_from_recurring_transactions(self):
+        """Update bills table from recurring transactions.
+        
+        Identifies recurring transactions and creates/updates bill records.
+        """
+        cursor = self.conn.cursor()
+        
+        # Get recurring transactions grouped by merchant
+        cursor.execute("""
+            SELECT 
+                merchant_name,
+                category,
+                AVG(amount) as avg_amount,
+                COUNT(*) as count,
+                MIN(transaction_date) as first_date,
+                MAX(transaction_date) as last_date
+            FROM transactions
+            WHERE is_recurring = 1 AND merchant_name IS NOT NULL
+            GROUP BY merchant_name
+            HAVING count >= 2
+        """)
+        
+        recurring = cursor.fetchall()
+        
+        for row in recurring:
+            merchant_name = row[0]
+            category = row[1]
+            avg_amount = abs(row[2]) if row[2] else 0
+            count = row[3]
+            first_date = row[4]
+            last_date = row[5]
+            
+            # Check if bill already exists
+            cursor.execute("SELECT id FROM bills WHERE merchant_name = ?", (merchant_name,))
+            existing = cursor.fetchone()
+            
+            if existing:
+                # Update existing bill
+                cursor.execute("""
+                    UPDATE bills
+                    SET amount = ?,
+                        category = ?,
+                        payment_count = ?,
+                        last_paid_date = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE merchant_name = ?
+                """, (avg_amount, category, count, last_date, merchant_name))
+            else:
+                # Create new bill
+                cursor.execute("""
+                    INSERT INTO bills (merchant_name, category, amount, frequency, 
+                                     last_paid_date, payment_count, total_paid)
+                    VALUES (?, ?, ?, 'monthly', ?, ?, ?)
+                """, (merchant_name, category, avg_amount, last_date, count, avg_amount * count))
+        
+        self.conn.commit()
+    
+    def get_upcoming_bills(self, days_ahead: int = 30) -> List[Dict[str, Any]]:
+        """Get bills due in the next N days.
+        
+        Args:
+            days_ahead: Number of days to look ahead (default: 30)
+        
+        Returns:
+            List of upcoming bills
+        """
+        from datetime import datetime, timedelta
+        
+        cursor = self.conn.cursor()
+        cutoff_date = (datetime.now() + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
+        
+        # Get bills with due dates in the next N days
+        cursor.execute("""
+            SELECT 
+                id, merchant_name, category, amount, due_date, next_due_date,
+                frequency, last_paid_date, payment_count
+            FROM bills
+            WHERE is_active = 1
+            AND (next_due_date IS NOT NULL AND next_due_date <= ?)
+            ORDER BY next_due_date ASC
+        """, (cutoff_date,))
+        
+        rows = cursor.fetchall()
+        
+        bills = []
+        for row in rows:
+            bills.append({
+                'id': row[0],
+                'merchant_name': row[1],
+                'category': row[2],
+                'amount': row[3],
+                'due_date': row[4],
+                'next_due_date': row[5],
+                'frequency': row[6],
+                'last_paid_date': row[7],
+                'payment_count': row[8],
+            })
+        
+        return bills
+    
+    def get_all_bills(self) -> List[Dict[str, Any]]:
+        """Get all active bills.
+        
+        Returns:
+            List of all bills
+        """
+        cursor = self.conn.cursor()
+        
+        cursor.execute("""
+            SELECT 
+                id, merchant_name, category, amount, due_date, next_due_date,
+                frequency, last_paid_date, payment_count, total_paid, notes
+            FROM bills
+            WHERE is_active = 1
+            ORDER BY merchant_name
+        """)
+        
+        rows = cursor.fetchall()
+        
+        bills = []
+        for row in rows:
+            bills.append({
+                'id': row[0],
+                'merchant_name': row[1],
+                'category': row[2],
+                'amount': row[3],
+                'due_date': row[4],
+                'next_due_date': row[5],
+                'frequency': row[6],
+                'last_paid_date': row[7],
+                'payment_count': row[8],
+                'total_paid': row[9],
+                'notes': row[10],
+            })
+        
+        return bills
     
     def export_to_json(self, output_path: str, date_range: Optional[Tuple[str, str]] = None, 
                        include_metadata: bool = True) -> bool:
