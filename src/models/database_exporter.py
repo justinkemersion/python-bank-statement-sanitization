@@ -975,44 +975,44 @@ class DatabaseExporter:
                         'notes': row[10] or '',
                         'is_recurring': 'Yes' if row[11] else 'No'
                     })
-            
-            # Also export investment data if available
-            cursor.execute("""
-                SELECT 
-                    ia.account_type, ia.bank_name, ia.statement_date, ia.portfolio_value,
-                    h.ticker, h.security_name, h.quantity, h.market_value
-                FROM investment_accounts ia
-                LEFT JOIN holdings h ON h.investment_account_id = ia.id
-                WHERE (ia.account_type, ia.bank_name, ia.statement_date) IN (
-                    SELECT account_type, bank_name, MAX(statement_date)
-                    FROM investment_accounts
-                    GROUP BY account_type, bank_name
-                )
-                ORDER BY ia.account_type, ia.bank_name, h.market_value DESC
-            """)
-            
-            investment_rows = cursor.fetchall()
-            if investment_rows:
-                # Append investment data to CSV
-                f.write("\n\n# INVESTMENT ACCOUNT DATA\n")
-                f.write("# This section contains investment account information.\n")
-                f.write("# Columns: account_type, bank_name, statement_date, portfolio_value, ticker, security_name, quantity, market_value\n\n")
                 
-                investment_writer = csv.writer(f)
-                investment_writer.writerow(['account_type', 'bank_name', 'statement_date', 'portfolio_value', 
-                                           'ticker', 'security_name', 'quantity', 'market_value'])
+                # Also export investment data if available (while file is still open)
+                cursor.execute("""
+                    SELECT 
+                        ia.account_type, ia.bank_name, ia.statement_date, ia.portfolio_value,
+                        h.ticker, h.security_name, h.quantity, h.market_value
+                    FROM investment_accounts ia
+                    LEFT JOIN holdings h ON h.investment_account_id = ia.id
+                    WHERE (ia.account_type, ia.bank_name, ia.statement_date) IN (
+                        SELECT account_type, bank_name, MAX(statement_date)
+                        FROM investment_accounts
+                        GROUP BY account_type, bank_name
+                    )
+                    ORDER BY ia.account_type, ia.bank_name, h.market_value DESC
+                """)
                 
-                for row in investment_rows:
-                    investment_writer.writerow([
-                        row[0] or '',  # account_type
-                        row[1] or '',   # bank_name
-                        row[2] or '',   # statement_date
-                        row[3] if row[3] is not None else '',  # portfolio_value
-                        row[4] or '',  # ticker
-                        row[5] or '',  # security_name
-                        row[6] if row[6] is not None else '',  # quantity
-                        row[7] if row[7] is not None else '',  # market_value
-                    ])
+                investment_rows = cursor.fetchall()
+                if investment_rows:
+                    # Append investment data to CSV
+                    f.write("\n\n# INVESTMENT ACCOUNT DATA\n")
+                    f.write("# This section contains investment account information.\n")
+                    f.write("# Columns: account_type, bank_name, statement_date, portfolio_value, ticker, security_name, quantity, market_value\n\n")
+                    
+                    investment_writer = csv.writer(f)
+                    investment_writer.writerow(['account_type', 'bank_name', 'statement_date', 'portfolio_value', 
+                                               'ticker', 'security_name', 'quantity', 'market_value'])
+                    
+                    for row in investment_rows:
+                        investment_writer.writerow([
+                            row[0] or '',  # account_type
+                            row[1] or '',   # bank_name
+                            row[2] or '',   # statement_date
+                            row[3] if row[3] is not None else '',  # portfolio_value
+                            row[4] or '',  # ticker
+                            row[5] or '',  # security_name
+                            row[6] if row[6] is not None else '',  # quantity
+                            row[7] if row[7] is not None else '',  # market_value
+                        ])
             
             return True
         except Exception as e:
