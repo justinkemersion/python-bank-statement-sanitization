@@ -784,6 +784,14 @@ class DatabaseExporter:
         account_stats = self.get_account_statistics()
         stats['accounts'] = account_stats
         
+        # Bank/issuer statistics
+        bank_stats = self.get_bank_statistics()
+        stats['banks'] = bank_stats
+        
+        # Investment account statistics
+        investment_stats = self.get_investment_statistics()
+        stats['investments'] = investment_stats
+        
         return stats
     
     def export_to_csv(self, output_path: str, date_range: Optional[Tuple[str, str]] = None, 
