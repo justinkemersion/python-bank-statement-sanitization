@@ -203,8 +203,56 @@ class PaystubExtractor:
                 return (match.group(1), match.group(2))
         return (None, None)
     
+    def extract_all(self, text: str, source_file: str) -> List[Dict[str, Any]]:
+        """Extract all paystubs from text (handles multiple paystubs in one document).
+        
+        Args:
+            text: Sanitized text content from paystub(s)
+            source_file: Source file name
+            
+        Returns:
+            List of paystub dictionaries (one per paystub found)
+        """
+        if not text:
+            return []
+        
+        # Try to split text into individual paystubs
+        # Common separators: page breaks, "PAY STUB", "EARNINGS STATEMENT", etc.
+        paystub_separators = [
+            r'\n\s*PAY\s+STUB\s*\n',
+            r'\n\s*EARNINGS\s+STATEMENT\s*\n',
+            r'\n\s*PAYROLL\s+STATEMENT\s*\n',
+            r'\n\s*PAY\s+PERIOD\s+ENDING\s*\n',
+            r'\n\s*=\s*\n',  # Separator line
+            r'\f',  # Form feed (page break)
+        ]
+        
+        # Try to split by paystub boundaries
+        paystub_sections = [text]  # Default: treat as single paystub
+        for separator in paystub_separators:
+            pattern = re.compile(separator, re.IGNORECASE | re.MULTILINE)
+            matches = list(pattern.finditer(text))
+            if len(matches) > 1:  # Found multiple paystubs
+                paystub_sections = []
+                start = 0
+                for match in matches:
+                    if match.start() > start:
+                        paystub_sections.append(text[start:match.start()])
+                    start = match.start()
+                paystub_sections.append(text[start:])  # Last section
+                break
+        
+        # Extract each paystub
+        paystubs = []
+        for i, section in enumerate(paystub_sections):
+            paystub = self.extract(section, f"{source_file}#{i+1}" if len(paystub_sections) > 1 else source_file)
+            if paystub:
+                paystubs.append(paystub)
+        
+        return paystubs
+    
     def extract(self, text: str, source_file: str) -> Optional[Dict[str, Any]]:
-        """Extract paystub data from text.
+        """Extract paystub data from text (single paystub).
         
         Args:
             text: Sanitized text content from paystub

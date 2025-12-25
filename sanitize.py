@@ -405,21 +405,33 @@ def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_
                                 cli.print(f"  Removed {deleted} existing transactions for re-import", MessageLevel.DEBUG)
                         
                         # Try to extract paystub data first (for PDF/TXT files)
-                        paystub = None
+                        paystubs = []
                         if ext.lower() in ['.pdf', '.txt']:
-                            paystub = db_exporter.extract_paystub_from_text(sanitized_text, os.path.basename(file_path))
-                            if paystub:
-                                inserted = db_exporter.insert_paystub(paystub, skip_duplicates=True)
-                                if inserted:
+                            paystubs = db_exporter.extract_paystub_from_text(sanitized_text, os.path.basename(file_path))
+                            if paystubs:
+                                inserted_count = 0
+                                skipped_count = 0
+                                for paystub in paystubs:
+                                    inserted = db_exporter.insert_paystub(paystub, skip_duplicates=True)
+                                    if inserted:
+                                        inserted_count += 1
+                                    else:
+                                        skipped_count += 1
+                                
+                                if inserted_count > 0:
                                     if cli.verbose:
-                                        cli.print(f"  Extracted and exported paystub data (Pay Date: {paystub.get('pay_date', 'N/A')}, Net: ${paystub.get('net_pay', 0):.2f})", MessageLevel.DEBUG)
-                                    db_exporter.record_file_import(file_path, 'paystub', 1, 'Paystub extracted')
-                                else:
+                                        cli.print(f"  Extracted {len(paystubs)} paystub(s) - {inserted_count} new, {skipped_count} duplicates", MessageLevel.DEBUG)
+                                        for paystub in paystubs[:3]:  # Show first 3
+                                            cli.print(f"    Pay Date: {paystub.get('pay_date', 'N/A')}, Net: ${paystub.get('net_pay', 0):.2f}", MessageLevel.DEBUG)
+                                        if len(paystubs) > 3:
+                                            cli.print(f"    ... and {len(paystubs) - 3} more", MessageLevel.DEBUG)
+                                    db_exporter.record_file_import(file_path, 'paystub', inserted_count, f'{len(paystubs)} paystubs extracted')
+                                elif skipped_count > 0:
                                     if cli.verbose:
-                                        cli.print(f"  Paystub already exists in database", MessageLevel.DEBUG)
+                                        cli.print(f"  All {len(paystubs)} paystub(s) already exist in database", MessageLevel.DEBUG)
                         
                         # Extract transactions (skip if this was a paystub)
-                        if not paystub:
+                        if not paystubs:
                             if ext.lower() == '.csv':
                                 transactions = db_exporter.extract_transactions_from_csv(sanitized_rows, os.path.basename(file_path))
                             elif ext.lower() in ['.xlsx', '.xls']:
@@ -631,21 +643,33 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metada
                                     cli.print(f"  Removed {deleted} existing transactions for re-import", MessageLevel.DEBUG)
                             
                             # Try to extract paystub data first (for PDF/TXT files)
-                            paystub = None
+                            paystubs = []
                             if ext.lower() in ['.pdf', '.txt']:
-                                paystub = db_exporter.extract_paystub_from_text(sanitized_text, os.path.basename(file_path))
-                                if paystub:
-                                    inserted = db_exporter.insert_paystub(paystub, skip_duplicates=True)
-                                    if inserted:
+                                paystubs = db_exporter.extract_paystub_from_text(sanitized_text, os.path.basename(file_path))
+                                if paystubs:
+                                    inserted_count = 0
+                                    skipped_count = 0
+                                    for paystub in paystubs:
+                                        inserted = db_exporter.insert_paystub(paystub, skip_duplicates=True)
+                                        if inserted:
+                                            inserted_count += 1
+                                        else:
+                                            skipped_count += 1
+                                    
+                                    if inserted_count > 0:
                                         if cli.verbose:
-                                            cli.print(f"  Extracted and exported paystub data (Pay Date: {paystub.get('pay_date', 'N/A')}, Net: ${paystub.get('net_pay', 0):.2f})", MessageLevel.DEBUG)
-                                        db_exporter.record_file_import(file_path, 'paystub', 1, 'Paystub extracted')
-                                    else:
+                                            cli.print(f"  Extracted {len(paystubs)} paystub(s) - {inserted_count} new, {skipped_count} duplicates", MessageLevel.DEBUG)
+                                            for paystub in paystubs[:3]:  # Show first 3
+                                                cli.print(f"    Pay Date: {paystub.get('pay_date', 'N/A')}, Net: ${paystub.get('net_pay', 0):.2f}", MessageLevel.DEBUG)
+                                            if len(paystubs) > 3:
+                                                cli.print(f"    ... and {len(paystubs) - 3} more", MessageLevel.DEBUG)
+                                        db_exporter.record_file_import(file_path, 'paystub', inserted_count, f'{len(paystubs)} paystubs extracted')
+                                    elif skipped_count > 0:
                                         if cli.verbose:
-                                            cli.print(f"  Paystub already exists in database", MessageLevel.DEBUG)
+                                            cli.print(f"  All {len(paystubs)} paystub(s) already exist in database", MessageLevel.DEBUG)
                             
                             # Extract transactions (skip if this was a paystub)
-                            if not paystub:
+                            if not paystubs:
                                 if ext.lower() == '.csv':
                                     transactions = db_exporter.extract_transactions_from_csv(sanitized_rows, os.path.basename(file_path))
                                 elif ext.lower() in ['.xlsx', '.xls']:
@@ -913,6 +937,14 @@ def main():
                     cli.print(f"Pay Period: {stats['paystubs']['first_pay_date']} to {stats['paystubs']['last_pay_date']}", MessageLevel.INFO)
                 if stats['paystubs']['employers']:
                     cli.print(f"Employers: {', '.join([e['name'] for e in stats['paystubs']['employers']])}", MessageLevel.INFO)
+            
+            # Account type statistics
+            if stats['accounts']['total_accounts'] > 0:
+                cli.print("", MessageLevel.INFO)  # Blank line
+                cli.print_header("Account Type Breakdown")
+                for account in stats['accounts']['accounts']:
+                    cli.print(f"{account['account_type']:<15} {account['transaction_count']:>6} transactions, "
+                             f"${account['total_amount']:>12,.2f} total", MessageLevel.INFO)
             
             # Parse date range if provided
             date_range = None

@@ -144,11 +144,67 @@ class DatabaseExporter:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_source_file ON transactions(source_file)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_merchant_name ON transactions(merchant_name)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_is_recurring ON transactions(is_recurring)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_account_type ON transactions(account_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_paystub_date ON paystubs(pay_date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_paystub_source ON paystubs(source_file)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_paystub_employer ON paystubs(employer_name)")
         
         self.conn.commit()
+    
+    def _detect_account_type(self, text: str, source_file: str) -> Optional[str]:
+        """Detect account type from statement text.
+        
+        Args:
+            text: Statement text content
+            source_file: Source file name
+            
+        Returns:
+            Account type string (e.g., 'checking', 'savings', 'credit_card') or None
+        """
+        text_lower = text.lower()
+        filename_lower = source_file.lower()
+        
+        # Check filename for account type indicators
+        if any(keyword in filename_lower for keyword in ['checking', 'check']):
+            return 'checking'
+        if any(keyword in filename_lower for keyword in ['savings', 'save']):
+            return 'savings'
+        if any(keyword in filename_lower for keyword in ['credit', 'card', 'amex', 'discover', 'visa', 'mastercard']):
+            return 'credit_card'
+        
+        # Check text content for account type indicators
+        account_patterns = {
+            'checking': [
+                r'checking\s+account',
+                r'checking\s+statement',
+                r'demand\s+deposit',
+            ],
+            'savings': [
+                r'savings\s+account',
+                r'savings\s+statement',
+            ],
+            'credit_card': [
+                r'credit\s+card',
+                r'card\s+statement',
+                r'cardmember\s+statement',
+                r'account\s+summary',
+                r'payment\s+due',
+                r'minimum\s+payment',
+                r'available\s+credit',
+                r'credit\s+limit',
+            ],
+        }
+        
+        for account_type, patterns in account_patterns.items():
+            for pattern in patterns:
+                if re.search(pattern, text_lower):
+                    return account_type
+        
+        # Default: try to infer from transaction patterns
+        # Credit cards often have negative amounts as purchases
+        # Checking accounts have mixed debits/credits
+        # This is a fallback heuristic
+        return None  # Unknown - let user specify if needed
     
     def extract_transactions_from_text(self, text: str, source_file: str) -> List[Dict[str, Any]]:
         """Extract transaction-like data from sanitized text.
@@ -165,6 +221,9 @@ class DatabaseExporter:
         """
         transactions = []
         lines = text.split('\n')
+        
+        # Detect account type
+        account_type = self._detect_account_type(text, source_file)
         
         # Look for date patterns and amounts
         date_pattern = r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}'
@@ -196,7 +255,7 @@ class DatabaseExporter:
                             'description': description,
                             'merchant_name': self.merchant_extractor.extract(description),
                             'category': self.categorizer.categorize(description),
-                            'account_type': None,
+                            'account_type': account_type,
                             'transaction_type': 'debit' if amount < 0 else 'credit',
                             'reference_number': None,
                             'notes': None,
@@ -261,6 +320,19 @@ class DatabaseExporter:
             for col in desc_columns:
                 if col in row and row[col]:
                     transaction['description'] = str(row[col])[:500]  # Limit length
+                    break
+            
+            # Try to detect account type from CSV data
+            account_type_columns = ['account_type', 'account', 'account_name', 'account_description']
+            for col in account_type_columns:
+                if col in row and row[col]:
+                    account_str = str(row[col]).lower()
+                    if 'checking' in account_str or 'check' in account_str:
+                        transaction['account_type'] = 'checking'
+                    elif 'savings' in account_str or 'save' in account_str:
+                        transaction['account_type'] = 'savings'
+                    elif 'credit' in account_str or 'card' in account_str:
+                        transaction['account_type'] = 'credit_card'
                     break
             
             # Only add if we have at least a date or amount
@@ -463,6 +535,10 @@ class DatabaseExporter:
         # Paystub statistics
         paystub_stats = self.get_paystub_statistics()
         stats['paystubs'] = paystub_stats
+        
+        # Account type statistics
+        account_stats = self.get_account_statistics()
+        stats['accounts'] = account_stats
         
         return stats
     
@@ -796,8 +872,48 @@ class DatabaseExporter:
             print(f"Error exporting to JSON: {e}")
             return False
     
-    def query_transactions(self, category: Optional[str] = None, 
+    def get_account_statistics(self) -> Dict[str, Any]:
+        """Get statistics by account type.
+        
+        Returns:
+            Dictionary with account type breakdown
+        """
+        cursor = self.conn.cursor()
+        
+        cursor.execute("""
+            SELECT 
+                COALESCE(account_type, 'Unknown') as account_type,
+                COUNT(*) as count,
+                SUM(amount) as total,
+                AVG(amount) as average,
+                MIN(transaction_date) as first_transaction,
+                MAX(transaction_date) as last_transaction
+            FROM transactions
+            WHERE amount IS NOT NULL
+            GROUP BY account_type
+            ORDER BY count DESC
+        """)
+        
+        rows = cursor.fetchall()
+        accounts = []
+        for row in rows:
+            accounts.append({
+                'account_type': row[0],
+                'transaction_count': row[1],
+                'total_amount': row[2] or 0,
+                'average_amount': row[3] or 0,
+                'first_transaction': row[4],
+                'last_transaction': row[5]
+            })
+        
+        return {
+            'accounts': accounts,
+            'total_accounts': len(accounts)
+        }
+    
+    def query_transactions(self, category: Optional[str] = None,
                           merchant: Optional[str] = None,
+                          account_type: Optional[str] = None,
                           min_amount: Optional[float] = None,
                           max_amount: Optional[float] = None,
                           date_range: Optional[Tuple[str, str]] = None,
@@ -808,6 +924,7 @@ class DatabaseExporter:
         Args:
             category: Filter by category name
             merchant: Filter by merchant name (partial match)
+            account_type: Filter by account type (e.g., 'checking', 'savings', 'credit_card')
             min_amount: Minimum transaction amount
             max_amount: Maximum transaction amount
             date_range: Tuple of (start_date, end_date) in YYYY-MM-DD format
@@ -822,7 +939,7 @@ class DatabaseExporter:
         query = """
             SELECT 
                 id, transaction_date, amount, description, merchant_name,
-                category, transaction_type, source_file, reference_number,
+                category, account_type, transaction_type, source_file, reference_number,
                 notes, is_recurring
             FROM transactions
             WHERE 1=1
@@ -837,6 +954,10 @@ class DatabaseExporter:
         if merchant:
             query += " AND merchant_name LIKE ?"
             params.append(f"%{merchant}%")
+        
+        if account_type:
+            query += " AND account_type = ?"
+            params.append(account_type)
         
         if min_amount is not None:
             query += " AND amount >= ?"
@@ -872,11 +993,12 @@ class DatabaseExporter:
                 'description': row[3],
                 'merchant_name': row[4],
                 'category': row[5],
-                'transaction_type': row[6],
-                'source_file': row[7],
-                'reference_number': row[8],
-                'notes': row[9],
-                'is_recurring': bool(row[10]) if row[10] is not None else False
+                'account_type': row[6],
+                'transaction_type': row[7],
+                'source_file': row[8],
+                'reference_number': row[9],
+                'notes': row[10],
+                'is_recurring': bool(row[11]) if row[11] is not None else False
             })
         
         return transactions
@@ -937,22 +1059,22 @@ class DatabaseExporter:
         
         return result
     
-    def extract_paystub_from_text(self, text: str, source_file: str) -> Optional[Dict[str, Any]]:
-        """Extract paystub data from sanitized text.
+    def extract_paystub_from_text(self, text: str, source_file: str) -> List[Dict[str, Any]]:
+        """Extract paystub data from sanitized text (handles multiple paystubs).
         
         Args:
             text: Sanitized text content
             source_file: Source file name
             
         Returns:
-            Dictionary with paystub data, or None if not a paystub
+            List of paystub dictionaries (empty if not a paystub)
         """
         # Check if this is a paystub
         if not self.paystub_extractor.is_paystub(text):
-            return None
+            return []
         
-        # Extract paystub data
-        return self.paystub_extractor.extract(text, source_file)
+        # Extract all paystubs (handles multiple paystubs in one document)
+        return self.paystub_extractor.extract_all(text, source_file)
     
     def insert_paystub(self, paystub: Dict[str, Any], skip_duplicates: bool = True) -> bool:
         """Insert a paystub into the database.
