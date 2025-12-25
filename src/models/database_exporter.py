@@ -2312,4 +2312,226 @@ class DatabaseExporter:
             })
         
         return budgets
+    
+    def set_financial_goal(self, goal_name: str, goal_type: str, target_amount: float, 
+                          target_date: Optional[str] = None, description: Optional[str] = None) -> Optional[int]:
+        """Set or create a financial goal.
+        
+        Args:
+            goal_name: Name of the goal (e.g., 'Emergency Fund', 'Pay off Discover')
+            goal_type: Type of goal ('debt_payoff', 'savings', 'investment', 'other')
+            target_amount: Target amount to reach
+            target_date: Target date (YYYY-MM-DD format, optional)
+            description: Optional description
+            
+        Returns:
+            Goal ID if successful, None otherwise
+        """
+        try:
+            cursor = self.conn.cursor()
+            from datetime import datetime
+            
+            start_date = datetime.now().strftime('%Y-%m-%d')
+            
+            cursor.execute("""
+                INSERT INTO financial_goals 
+                (goal_name, goal_type, target_amount, current_amount, target_date, start_date, description)
+                VALUES (?, ?, ?, 0, ?, ?, ?)
+            """, (goal_name, goal_type, target_amount, target_date, start_date, description))
+            
+            goal_id = cursor.lastrowid
+            self.conn.commit()
+            return goal_id
+        except Exception as e:
+            print(f"Error setting financial goal: {e}")
+            return None
+    
+    def update_goal_progress(self, goal_id: int, current_amount: float) -> bool:
+        """Update progress toward a financial goal.
+        
+        Args:
+            goal_id: Goal ID
+            current_amount: Current progress amount
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                UPDATE financial_goals
+                SET current_amount = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (current_amount, goal_id))
+            
+            self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error updating goal progress: {e}")
+            return False
+    
+    def get_all_goals(self, active_only: bool = True) -> List[Dict[str, Any]]:
+        """Get all financial goals.
+        
+        Args:
+            active_only: If True, only return active goals
+            
+        Returns:
+            List of goal dictionaries with progress information
+        """
+        cursor = self.conn.cursor()
+        
+        if active_only:
+            cursor.execute("""
+                SELECT id, goal_name, goal_type, target_amount, current_amount,
+                       target_date, start_date, description
+                FROM financial_goals
+                WHERE is_active = 1
+                ORDER BY target_date, goal_name
+            """)
+        else:
+            cursor.execute("""
+                SELECT id, goal_name, goal_type, target_amount, current_amount,
+                       target_date, start_date, description
+                FROM financial_goals
+                ORDER BY target_date, goal_name
+            """)
+        
+        rows = cursor.fetchall()
+        
+        goals = []
+        for row in rows:
+            goal_id = row[0]
+            goal_name = row[1]
+            goal_type = row[2]
+            target_amount = row[3]
+            current_amount = row[4] or 0
+            target_date = row[5]
+            start_date = row[6]
+            description = row[7]
+            
+            # Calculate progress
+            progress_percentage = (current_amount / target_amount * 100) if target_amount > 0 else 0
+            remaining = target_amount - current_amount
+            
+            goals.append({
+                'id': goal_id,
+                'goal_name': goal_name,
+                'goal_type': goal_type,
+                'target_amount': target_amount,
+                'current_amount': current_amount,
+                'remaining': remaining,
+                'progress_percentage': progress_percentage,
+                'target_date': target_date,
+                'start_date': start_date,
+                'description': description,
+            })
+        
+        return goals
+    
+    def calculate_cash_flow_forecast(self, months_ahead: int = 6) -> List[Dict[str, Any]]:
+        """Calculate cash flow forecast based on historical patterns.
+        
+        Args:
+            months_ahead: Number of months to forecast (default: 6)
+            
+        Returns:
+            List of monthly cash flow forecasts
+        """
+        from datetime import datetime, timedelta
+        from collections import defaultdict
+        import calendar
+        
+        cursor = self.conn.cursor()
+        
+        # Get historical income and expenses by month
+        cursor.execute("""
+            SELECT 
+                strftime('%Y-%m', transaction_date) as month,
+                SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as income,
+                SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as expenses
+            FROM transactions
+            WHERE transaction_date IS NOT NULL
+            AND transaction_date >= date('now', '-12 months')
+            GROUP BY month
+            ORDER BY month
+        """)
+        
+        historical = cursor.fetchall()
+        
+        if not historical:
+            return []
+        
+        # Calculate averages
+        monthly_income = defaultdict(list)
+        monthly_expenses = defaultdict(list)
+        
+        for row in historical:
+            month = row[0]
+            income = row[1] or 0
+            expenses = row[2] or 0
+            
+            # Extract month number (01-12)
+            month_num = int(month.split('-')[1])
+            monthly_income[month_num].append(income)
+            monthly_expenses[month_num].append(expenses)
+        
+        # Calculate averages per month
+        avg_income_by_month = {}
+        avg_expenses_by_month = {}
+        
+        # Overall averages as fallback
+        all_income = [sum(monthly_income[m]) for m in monthly_income if monthly_income[m]]
+        all_expenses = [sum(monthly_expenses[m]) for m in monthly_expenses if monthly_expenses[m]]
+        overall_avg_income = sum(all_income) / len(all_income) if all_income else 0
+        overall_avg_expenses = sum(all_expenses) / len(all_expenses) if all_expenses else 0
+        
+        for month_num in range(1, 13):
+            if monthly_income[month_num]:
+                avg_income_by_month[month_num] = sum(monthly_income[month_num]) / len(monthly_income[month_num])
+            else:
+                avg_income_by_month[month_num] = overall_avg_income
+            
+            if monthly_expenses[month_num]:
+                avg_expenses_by_month[month_num] = sum(monthly_expenses[month_num]) / len(monthly_expenses[month_num])
+            else:
+                avg_expenses_by_month[month_num] = overall_avg_expenses
+        
+        # Get recurring income
+        recurring_income = self._detect_recurring_income()
+        monthly_recurring_income = sum(r['avg_amount'] for r in recurring_income)
+        
+        # Get recurring bills
+        bills = self.get_all_bills()
+        monthly_recurring_expenses = sum(b.get('amount', 0) for b in bills)
+        
+        # Generate forecast
+        forecast = []
+        now = datetime.now()
+        
+        for i in range(months_ahead):
+            forecast_date = now + timedelta(days=30 * i)
+            month_num = forecast_date.month
+            year = forecast_date.year
+            month_name = calendar.month_name[month_num]
+            
+            # Projected income (historical average + recurring)
+            projected_income = avg_income_by_month.get(month_num, overall_avg_income) + monthly_recurring_income
+            
+            # Projected expenses (historical average + recurring bills)
+            projected_expenses = avg_expenses_by_month.get(month_num, overall_avg_expenses) + monthly_recurring_expenses
+            
+            # Net cash flow
+            net_cash_flow = projected_income - projected_expenses
+            
+            forecast.append({
+                'month': f"{year}-{month_num:02d}",
+                'month_name': f"{month_name} {year}",
+                'projected_income': projected_income,
+                'projected_expenses': projected_expenses,
+                'net_cash_flow': net_cash_flow,
+                'is_positive': net_cash_flow > 0,
+            })
+        
+        return forecast
 
