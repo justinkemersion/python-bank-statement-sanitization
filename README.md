@@ -33,6 +33,14 @@ This project aims to develop a robust Python application for sanitizing sensitiv
 - **Paystub Support:** Extract structured data from paystubs including gross pay, net pay, deductions, and year-to-date totals.
 - **Multiple Paystubs per PDF:** Handles PDFs containing multiple paystubs, extracting each individually.
 - **Income Analytics:** Compare income vs spending, calculate savings rate, and track income trends.
+- **Recurring Income Detection:** Automatically detect and track recurring income sources (salary, dividends, interest).
+
+### Tax Preparation
+- **Tax Document Extraction:** Extract data from 1099-INT, 1099-DIV, 1099-B, and W-2 forms.
+- **Tax-Deductible Expense Tracking:** Automatically categorize and track deductible expenses (business, medical, charity, etc.).
+- **Tax Summary Reports:** Generate comprehensive tax summaries by year with all income sources.
+- **Tax Report Export:** Export tax-ready reports for filing (Schedule A, Schedule C, Schedule D).
+- **See [TAX_PREPARATION_GUIDE.md](TAX_PREPARATION_GUIDE.md) for complete tax preparation workflow.**
 
 ### Query & Export
 - **Database Query Interface:** Query transactions by category, merchant, bank, account type, amount range, date range, and recurring status.
@@ -199,6 +207,11 @@ python sanitize.py ./statements --dry-run
 **Bill Management Options:**
 - `--show-bills`: Show all recurring bills detected from transactions
 - `--upcoming-bills [days]`: Show bills due in next N days (default: 30 days)
+
+**Tax Preparation Options:**
+- `--tax-summary [year]`: Show tax summary for a given year (default: current year, requires --query-db)
+- `--tax-deductions [year]`: Show tax-deductible expenses for a given year (default: current year, requires --query-db)
+- `--export-tax-report <path>`: Export comprehensive tax report to file (requires --query-db)
 
 **Examples:**
 
