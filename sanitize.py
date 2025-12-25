@@ -946,6 +946,14 @@ def main():
                     cli.print(f"{account['account_type']:<15} {account['transaction_count']:>6} transactions, "
                              f"${account['total_amount']:>12,.2f} total", MessageLevel.INFO)
             
+            # Bank/issuer statistics
+            if stats['banks']['total_banks'] > 0:
+                cli.print("", MessageLevel.INFO)  # Blank line
+                cli.print_header("Bank/Issuer Breakdown")
+                for bank in stats['banks']['banks']:
+                    cli.print(f"{bank['bank_name']:<25} {bank['account_type']:<12} "
+                             f"{bank['transaction_count']:>6} transactions, ${bank['total_amount']:>12,.2f} total", MessageLevel.INFO)
+            
             # Parse date range if provided
             date_range = None
             if args.date_range:

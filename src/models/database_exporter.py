@@ -61,6 +61,7 @@ class DatabaseExporter:
                 merchant_name TEXT,
                 category TEXT,
                 account_type TEXT,
+                bank_name TEXT,
                 transaction_type TEXT,
                 reference_number TEXT,
                 notes TEXT,
@@ -145,11 +146,109 @@ class DatabaseExporter:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_merchant_name ON transactions(merchant_name)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_is_recurring ON transactions(is_recurring)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_account_type ON transactions(account_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bank_name ON transactions(bank_name)")
+        
+        # Add bank_name column if it doesn't exist (migration)
+        try:
+            cursor.execute("ALTER TABLE transactions ADD COLUMN bank_name TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_paystub_date ON paystubs(pay_date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_paystub_source ON paystubs(source_file)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_paystub_employer ON paystubs(employer_name)")
         
         self.conn.commit()
+    
+    def _detect_bank_name(self, text: str, source_file: str) -> Optional[str]:
+        """Detect bank/issuer name from statement text and filename.
+        
+        Args:
+            text: Statement text content
+            source_file: Source file name
+            
+        Returns:
+            Bank/issuer name (e.g., 'Discover', 'American Express', 'Charles Schwab') or None
+        """
+        text_lower = text.lower()
+        filename_lower = source_file.lower()
+        
+        # Known bank/issuer patterns (order matters - more specific first)
+        bank_patterns = {
+            'American Express': [
+                r'american\s+express',
+                r'amex',
+                r'\bamex\b',
+            ],
+            'Discover': [
+                r'discover\s+(?:card|bank|financial)',
+                r'\bdiscover\b',
+            ],
+            'Charles Schwab': [
+                r'charles\s+schwab',
+                r'schwab\s+(?:bank|investor)',
+                r'\bschwab\b',
+            ],
+            'Chase': [
+                r'chase\s+(?:bank|card|sapphire)',
+                r'\bchase\b',
+            ],
+            'Bank of America': [
+                r'bank\s+of\s+america',
+                r'\bbofa\b',
+                r'\bbankofamerica\b',
+            ],
+            'Wells Fargo': [
+                r'wells\s+fargo',
+            ],
+            'Citibank': [
+                r'citi\s+(?:bank|card)',
+                r'\bcitibank\b',
+            ],
+            'Capital One': [
+                r'capital\s+one',
+            ],
+            'US Bank': [
+                r'us\s+bank',
+                r'\busbank\b',
+            ],
+            'PNC': [
+                r'\bpnc\s+(?:bank|card)',
+            ],
+            'TD Bank': [
+                r'td\s+bank',
+            ],
+            'Ally Bank': [
+                r'ally\s+bank',
+            ],
+        }
+        
+        # Check filename first (often most reliable)
+        for bank_name, patterns in bank_patterns.items():
+            for pattern in patterns:
+                if re.search(pattern, filename_lower):
+                    return bank_name
+        
+        # Check text content
+        for bank_name, patterns in bank_patterns.items():
+            for pattern in patterns:
+                if re.search(pattern, text_lower):
+                    return bank_name
+        
+        # Try to extract from common statement headers
+        header_patterns = [
+            r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(?:card|bank|statement|account)',
+            r'statement\s+from\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
+        ]
+        
+        for pattern in header_patterns:
+            match = re.search(pattern, text)
+            if match:
+                potential_bank = match.group(1).strip()
+                # Validate it's a known bank or looks like a bank name
+                if len(potential_bank) > 2 and potential_bank not in ['Account', 'Credit', 'Debit']:
+                    return potential_bank
+        
+        return None  # Unknown bank
     
     def _detect_account_type(self, text: str, source_file: str) -> Optional[str]:
         """Detect account type from statement text.
@@ -222,8 +321,9 @@ class DatabaseExporter:
         transactions = []
         lines = text.split('\n')
         
-        # Detect account type
+        # Detect account type and bank name
         account_type = self._detect_account_type(text, source_file)
+        bank_name = self._detect_bank_name(text, source_file)
         
         # Look for date patterns and amounts
         date_pattern = r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}'
@@ -256,6 +356,7 @@ class DatabaseExporter:
                             'merchant_name': self.merchant_extractor.extract(description),
                             'category': self.categorizer.categorize(description),
                             'account_type': account_type,
+                            'bank_name': bank_name,
                             'transaction_type': 'debit' if amount < 0 else 'credit',
                             'reference_number': None,
                             'notes': None,
@@ -285,6 +386,9 @@ class DatabaseExporter:
         desc_columns = ['description', 'memo', 'details', 'transaction_description']
         
         for row in rows:
+            # Detect bank name from filename (for CSV/Excel files)
+            bank_name = self._detect_bank_name("", source_file)  # Pass empty text, use filename only
+            
             transaction = {
                 'source_file': source_file,
                 'transaction_date': None,
@@ -293,6 +397,7 @@ class DatabaseExporter:
                 'merchant_name': None,
                 'category': None,
                 'account_type': None,
+                'bank_name': bank_name,
                 'transaction_type': None,
                 'reference_number': None,
                 'notes': None,
@@ -434,8 +539,8 @@ class DatabaseExporter:
             cursor.execute("""
                 INSERT INTO transactions 
                 (source_file, transaction_date, amount, description, merchant_name, category, 
-                 account_type, transaction_type, reference_number, notes, is_recurring)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 account_type, bank_name, transaction_type, reference_number, notes, is_recurring)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 transaction.get('source_file'),
                 transaction.get('transaction_date'),
@@ -444,6 +549,7 @@ class DatabaseExporter:
                 transaction.get('merchant_name'),
                 transaction.get('category'),
                 transaction.get('account_type'),
+                transaction.get('bank_name'),
                 transaction.get('transaction_type'),
                 transaction.get('reference_number'),
                 transaction.get('notes'),
@@ -565,6 +671,8 @@ class DatabaseExporter:
                     description,
                     merchant_name,
                     category,
+                    account_type,
+                    bank_name,
                     transaction_type,
                     source_file,
                     reference_number,
@@ -603,11 +711,13 @@ class DatabaseExporter:
 #   - description: Transaction description (sanitized - sensitive data removed)
 #   - merchant_name: Extracted merchant name (if available)
 #   - category: Transaction category (if available)
+#   - account_type: Type of account ('checking', 'savings', 'credit_card', etc.)
+#   - bank_name: Bank/issuer name (e.g., 'Discover', 'American Express', 'Charles Schwab')
 #   - transaction_type: 'debit' or 'credit'
 #   - source_file: Original statement file name
 #   - reference_number: Transaction reference number (if available)
 #   - notes: Additional notes
-#   - is_recurring: Whether this is a recurring transaction (1 = yes, 0 = no)
+#   - is_recurring: Whether this is a recurring transaction (Yes/No)
 #
 # NOTE: All sensitive information (account numbers, SSN, etc.) has been redacted.
 # The [REDACTED] placeholders indicate where sensitive data was removed.
@@ -618,8 +728,8 @@ class DatabaseExporter:
                 
                 # Write CSV data
                 fieldnames = ['transaction_date', 'amount', 'description', 'merchant_name',
-                            'category', 'transaction_type', 'source_file', 'reference_number',
-                            'notes', 'is_recurring']
+                            'category', 'account_type', 'bank_name', 'transaction_type', 
+                            'source_file', 'reference_number', 'notes', 'is_recurring']
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 
@@ -630,11 +740,13 @@ class DatabaseExporter:
                         'description': row[2] or '',
                         'merchant_name': row[3] or '',
                         'category': row[4] or '',
-                        'transaction_type': row[5] or '',
-                        'source_file': row[6] or '',
-                        'reference_number': row[7] or '',
-                        'notes': row[8] or '',
-                        'is_recurring': 'Yes' if row[9] else 'No'
+                        'account_type': row[5] or '',
+                        'bank_name': row[6] or '',
+                        'transaction_type': row[7] or '',
+                        'source_file': row[8] or '',
+                        'reference_number': row[9] or '',
+                        'notes': row[10] or '',
+                        'is_recurring': 'Yes' if row[11] else 'No'
                     })
             
             return True
@@ -803,6 +915,8 @@ class DatabaseExporter:
                     description,
                     merchant_name,
                     category,
+                    account_type,
+                    bank_name,
                     transaction_type,
                     source_file,
                     reference_number,
@@ -911,9 +1025,51 @@ class DatabaseExporter:
             'total_accounts': len(accounts)
         }
     
-    def query_transactions(self, category: Optional[str] = None,
+    def get_bank_statistics(self) -> Dict[str, Any]:
+        """Get statistics by bank/issuer name.
+        
+        Returns:
+            Dictionary with bank breakdown
+        """
+        cursor = self.conn.cursor()
+        
+        cursor.execute("""
+            SELECT 
+                COALESCE(bank_name, 'Unknown') as bank_name,
+                COALESCE(account_type, 'Unknown') as account_type,
+                COUNT(*) as count,
+                SUM(amount) as total,
+                AVG(amount) as average,
+                MIN(transaction_date) as first_transaction,
+                MAX(transaction_date) as last_transaction
+            FROM transactions
+            WHERE amount IS NOT NULL
+            GROUP BY bank_name, account_type
+            ORDER BY count DESC
+        """)
+        
+        rows = cursor.fetchall()
+        banks = []
+        for row in rows:
+            banks.append({
+                'bank_name': row[0],
+                'account_type': row[1],
+                'transaction_count': row[2],
+                'total_amount': row[3] or 0,
+                'average_amount': row[4] or 0,
+                'first_transaction': row[5],
+                'last_transaction': row[6]
+            })
+        
+        return {
+            'banks': banks,
+            'total_banks': len(set(b[0] for b in banks))
+        }
+    
+    def query_transactions(self, category: Optional[str] = None, 
                           merchant: Optional[str] = None,
                           account_type: Optional[str] = None,
+                          bank_name: Optional[str] = None,
                           min_amount: Optional[float] = None,
                           max_amount: Optional[float] = None,
                           date_range: Optional[Tuple[str, str]] = None,
@@ -925,6 +1081,7 @@ class DatabaseExporter:
             category: Filter by category name
             merchant: Filter by merchant name (partial match)
             account_type: Filter by account type (e.g., 'checking', 'savings', 'credit_card')
+            bank_name: Filter by bank/issuer name (e.g., 'Discover', 'American Express')
             min_amount: Minimum transaction amount
             max_amount: Maximum transaction amount
             date_range: Tuple of (start_date, end_date) in YYYY-MM-DD format
@@ -939,8 +1096,8 @@ class DatabaseExporter:
         query = """
             SELECT 
                 id, transaction_date, amount, description, merchant_name,
-                category, account_type, transaction_type, source_file, reference_number,
-                notes, is_recurring
+                category, account_type, bank_name, transaction_type, source_file, 
+                reference_number, notes, is_recurring
             FROM transactions
             WHERE 1=1
         """
@@ -958,6 +1115,10 @@ class DatabaseExporter:
         if account_type:
             query += " AND account_type = ?"
             params.append(account_type)
+        
+        if bank_name:
+            query += " AND bank_name = ?"
+            params.append(bank_name)
         
         if min_amount is not None:
             query += " AND amount >= ?"
@@ -994,11 +1155,12 @@ class DatabaseExporter:
                 'merchant_name': row[4],
                 'category': row[5],
                 'account_type': row[6],
-                'transaction_type': row[7],
-                'source_file': row[8],
-                'reference_number': row[9],
-                'notes': row[10],
-                'is_recurring': bool(row[11]) if row[11] is not None else False
+                'bank_name': row[7],
+                'transaction_type': row[8],
+                'source_file': row[9],
+                'reference_number': row[10],
+                'notes': row[11],
+                'is_recurring': bool(row[12]) if row[12] is not None else False
             })
         
         return transactions
