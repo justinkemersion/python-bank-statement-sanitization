@@ -46,7 +46,8 @@ Examples:
     
     parser.add_argument(
         "input_path",
-        help="Path to a file or directory containing bank statements to sanitize"
+        nargs='?',
+        help="Path to a file or directory containing bank statements to sanitize (optional if using --query-db)"
     )
     
     parser.add_argument(
@@ -102,6 +103,72 @@ Examples:
         "--export-report",
         dest="export_report",
         help="Export database to summary report text file for AI analysis (requires --export-db)"
+    )
+    
+    parser.add_argument(
+        "--export-json",
+        dest="export_json",
+        help="Export database to JSON file for programmatic access (requires --export-db)"
+    )
+    
+    parser.add_argument(
+        "--date-range",
+        dest="date_range",
+        help="Filter transactions by date range (format: YYYY-MM-DD:YYYY-MM-DD, e.g., 2024-01-01:2024-12-31)"
+    )
+    
+    # Query mode arguments
+    parser.add_argument(
+        "--query-db",
+        dest="query_db",
+        help="Query existing database (specify database file path). Use with --category, --merchant, --min-amount, --max-amount, --recurring"
+    )
+    
+    parser.add_argument(
+        "--category",
+        dest="query_category",
+        help="Filter query results by category name"
+    )
+    
+    parser.add_argument(
+        "--merchant",
+        dest="query_merchant",
+        help="Filter query results by merchant name (partial match)"
+    )
+    
+    parser.add_argument(
+        "--min-amount",
+        dest="query_min_amount",
+        type=float,
+        help="Filter query results by minimum transaction amount"
+    )
+    
+    parser.add_argument(
+        "--max-amount",
+        dest="query_max_amount",
+        type=float,
+        help="Filter query results by maximum transaction amount"
+    )
+    
+    parser.add_argument(
+        "--recurring",
+        dest="query_recurring",
+        action="store_true",
+        help="Show only recurring transactions in query results"
+    )
+    
+    parser.add_argument(
+        "--list-recurring",
+        dest="list_recurring",
+        action="store_true",
+        help="List all recurring transactions grouped by merchant (requires --query-db)"
+    )
+    
+    parser.add_argument(
+        "--limit",
+        dest="query_limit",
+        type=int,
+        help="Limit number of query results (default: no limit)"
     )
     
     parser.add_argument(
@@ -545,6 +612,101 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metada
             cli.files_failed += 1
 
 
+def parse_date_range(date_range_str: str) -> Tuple[str, str]:
+    """Parse date range string into tuple.
+    
+    Args:
+        date_range_str: Date range in format "YYYY-MM-DD:YYYY-MM-DD"
+        
+    Returns:
+        Tuple of (start_date, end_date)
+    """
+    try:
+        start_date, end_date = date_range_str.split(':')
+        return start_date.strip(), end_date.strip()
+    except ValueError:
+        raise ValueError("Date range must be in format YYYY-MM-DD:YYYY-MM-DD")
+
+
+def handle_query_mode(args, cli: CLIView):
+    """Handle database query mode.
+    
+    Args:
+        args: Parsed command-line arguments
+        cli: CLI view instance
+    """
+    if not args.query_db:
+        cli.print("Error: --query-db is required for query mode", MessageLevel.ERROR)
+        sys.exit(1)
+    
+    db_path = os.path.abspath(args.query_db)
+    if not os.path.exists(db_path):
+        cli.print(f"Error: Database file not found: {db_path}", MessageLevel.ERROR)
+        sys.exit(1)
+    
+    db_exporter = DatabaseExporter(db_path)
+    if not db_exporter.connect():
+        cli.print("Error: Failed to connect to database", MessageLevel.ERROR)
+        sys.exit(1)
+    
+    # Parse date range if provided
+    date_range = None
+    if args.date_range:
+        try:
+            date_range = parse_date_range(args.date_range)
+        except ValueError as e:
+            cli.print(f"Error: {e}", MessageLevel.ERROR)
+            sys.exit(1)
+    
+    # Handle list recurring transactions
+    if args.list_recurring:
+        cli.print_header("Recurring Transactions")
+        recurring = db_exporter.get_recurring_transactions()
+        
+        if not recurring:
+            cli.print("No recurring transactions found.", MessageLevel.INFO)
+        else:
+            for item in recurring:
+                cli.print(f"\n{item['merchant_name']}", MessageLevel.INFO)
+                cli.print(f"  Transactions: {item['transaction_count']}", MessageLevel.DEBUG)
+                cli.print(f"  Average Amount: ${item['average_amount']:,.2f}", MessageLevel.DEBUG)
+                cli.print(f"  Total Amount: ${item['total_amount']:,.2f}", MessageLevel.DEBUG)
+                cli.print(f"  First: {item['first_transaction']} | Last: {item['last_transaction']}", MessageLevel.DEBUG)
+        
+        db_exporter.close()
+        return
+    
+    # Query transactions
+    cli.print_header("Query Results")
+    
+    transactions = db_exporter.query_transactions(
+        category=args.query_category,
+        merchant=args.query_merchant,
+        min_amount=args.query_min_amount,
+        max_amount=args.query_max_amount,
+        date_range=date_range,
+        is_recurring=args.query_recurring if args.query_recurring else None,
+        limit=args.query_limit
+    )
+    
+    if not transactions:
+        cli.print("No transactions found matching the criteria.", MessageLevel.INFO)
+    else:
+        cli.print(f"Found {len(transactions)} transaction(s):\n", MessageLevel.INFO)
+        
+        for trans in transactions:
+            amount_str = f"${trans['amount']:,.2f}" if trans['amount'] else "N/A"
+            merchant_str = f" | {trans['merchant_name']}" if trans['merchant_name'] else ""
+            category_str = f" | {trans['category']}" if trans['category'] else ""
+            recurring_str = " [RECURRING]" if trans['is_recurring'] else ""
+            
+            cli.print(f"{trans['transaction_date']} | {amount_str}{merchant_str}{category_str}{recurring_str}", MessageLevel.INFO)
+            if trans['description']:
+                cli.print(f"  {trans['description'][:80]}", MessageLevel.DEBUG)
+    
+    db_exporter.close()
+
+
 def main():
     """Main entry point."""
     args = parse_arguments()
@@ -552,7 +714,17 @@ def main():
     # Initialize CLI view
     cli = CLIView(verbose=args.verbose, quiet=args.quiet, dry_run=args.dry_run)
     
-    # Validate input path (file or directory)
+    # Handle query mode (if --query-db is specified)
+    if args.query_db or args.list_recurring:
+        handle_query_mode(args, cli)
+        sys.exit(0)
+    
+    # Validate input path (file or directory) - required for sanitization mode
+    if not args.input_path:
+        cli.print("Error: input_path is required for sanitization mode", MessageLevel.ERROR)
+        cli.print("  Use --query-db for query mode, or provide input_path for sanitization", MessageLevel.INFO)
+        sys.exit(1)
+    
     is_valid, is_file, input_path = validate_input_path(args.input_path, cli)
     if not is_valid:
         sys.exit(1)
@@ -634,10 +806,19 @@ def main():
             if stats['total_amount']:
                 cli.print(f"Total Amount: ${stats['total_amount']:,.2f}", MessageLevel.INFO)
             
+            # Parse date range if provided
+            date_range = None
+            if args.date_range:
+                try:
+                    date_range = parse_date_range(args.date_range)
+                    cli.print(f"Date range filter: {date_range[0]} to {date_range[1]}", MessageLevel.INFO)
+                except ValueError as e:
+                    cli.print(f"Warning: Invalid date range format: {e}", MessageLevel.WARNING)
+            
             # Export to CSV if requested
             if args.export_csv:
                 csv_path = os.path.abspath(args.export_csv)
-                if db_exporter.export_to_csv(csv_path):
+                if db_exporter.export_to_csv(csv_path, date_range=date_range):
                     cli.print(f"\n✓ Exported transactions to CSV: {csv_path}", MessageLevel.SUCCESS)
                     cli.print("  This file is ready to upload to NotebookLM for analysis.", MessageLevel.INFO)
                 else:
@@ -651,6 +832,15 @@ def main():
                     cli.print("  This report is ready to upload to NotebookLM for analysis.", MessageLevel.INFO)
                 else:
                     cli.print(f"✗ Failed to export report", MessageLevel.ERROR)
+            
+            # Export to JSON if requested
+            if args.export_json:
+                json_path = os.path.abspath(args.export_json)
+                if db_exporter.export_to_json(json_path, date_range=date_range):
+                    cli.print(f"\n✓ Exported transactions to JSON: {json_path}", MessageLevel.SUCCESS)
+                    cli.print("  This file is ready for programmatic access.", MessageLevel.INFO)
+                else:
+                    cli.print(f"✗ Failed to export JSON", MessageLevel.ERROR)
             
             db_exporter.close()
         

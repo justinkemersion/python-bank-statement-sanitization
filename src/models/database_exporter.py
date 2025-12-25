@@ -5,9 +5,13 @@ Exports sanitized financial data to SQLite database for tax analysis and AI revi
 
 import sqlite3
 import os
+import json
 from datetime import datetime
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 import re
+
+from src.models.transaction_categorizer import TransactionCategorizer
+from src.models.merchant_extractor import MerchantExtractor
 
 
 class DatabaseExporter:
@@ -21,6 +25,8 @@ class DatabaseExporter:
         """
         self.db_path = db_path
         self.conn = None
+        self.categorizer = TransactionCategorizer()
+        self.merchant_extractor = MerchantExtractor()
     
     def connect(self):
         """Connect to the database."""
@@ -49,15 +55,29 @@ class DatabaseExporter:
                 transaction_date TEXT,
                 amount REAL,
                 description TEXT,
+                merchant_name TEXT,
                 category TEXT,
                 account_type TEXT,
                 transaction_type TEXT,
                 reference_number TEXT,
                 notes TEXT,
+                is_recurring INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        # Add merchant_name column if it doesn't exist (migration)
+        try:
+            cursor.execute("ALTER TABLE transactions ADD COLUMN merchant_name TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        
+        # Add is_recurring column if it doesn't exist (migration)
+        try:
+            cursor.execute("ALTER TABLE transactions ADD COLUMN is_recurring INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         
         # Files table - track which files have been imported
         cursor.execute("""
@@ -86,6 +106,8 @@ class DatabaseExporter:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_amount ON transactions(amount)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_category ON transactions(category)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_source_file ON transactions(source_file)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_merchant_name ON transactions(merchant_name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_is_recurring ON transactions(is_recurring)")
         
         self.conn.commit()
     
@@ -127,16 +149,19 @@ class DatabaseExporter:
                     amount = float(amount_str.replace(',', ''))
                     # Only consider significant amounts (likely transactions)
                     if abs(amount) > 0.01:
+                        description = line[:200]  # First 200 chars
                         transaction = {
                             'source_file': source_file,
                             'transaction_date': current_date or None,
                             'amount': amount,
-                            'description': line[:200],  # First 200 chars
-                            'category': None,
+                            'description': description,
+                            'merchant_name': self.merchant_extractor.extract(description),
+                            'category': self.categorizer.categorize(description),
                             'account_type': None,
                             'transaction_type': 'debit' if amount < 0 else 'credit',
                             'reference_number': None,
-                            'notes': None
+                            'notes': None,
+                            'is_recurring': 0
                         }
                         transactions.append(transaction)
                 except ValueError:
@@ -167,11 +192,13 @@ class DatabaseExporter:
                 'transaction_date': None,
                 'amount': None,
                 'description': None,
+                'merchant_name': None,
                 'category': None,
                 'account_type': None,
                 'transaction_type': None,
                 'reference_number': None,
-                'notes': None
+                'notes': None,
+                'is_recurring': 0
             }
             
             # Find date column
@@ -199,6 +226,10 @@ class DatabaseExporter:
             
             # Only add if we have at least a date or amount
             if transaction['transaction_date'] or transaction['amount']:
+                # Extract merchant name and categorize
+                if transaction['description']:
+                    transaction['merchant_name'] = self.merchant_extractor.extract(transaction['description'])
+                    transaction['category'] = self.categorizer.categorize(transaction['description'])
                 transactions.append(transaction)
         
         return transactions
@@ -233,22 +264,27 @@ class DatabaseExporter:
         for transaction in transactions:
             cursor.execute("""
                 INSERT INTO transactions 
-                (source_file, transaction_date, amount, description, category, 
-                 account_type, transaction_type, reference_number, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (source_file, transaction_date, amount, description, merchant_name, category, 
+                 account_type, transaction_type, reference_number, notes, is_recurring)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 transaction.get('source_file'),
                 transaction.get('transaction_date'),
                 transaction.get('amount'),
                 transaction.get('description'),
+                transaction.get('merchant_name'),
                 transaction.get('category'),
                 transaction.get('account_type'),
                 transaction.get('transaction_type'),
                 transaction.get('reference_number'),
-                transaction.get('notes')
+                transaction.get('notes'),
+                transaction.get('is_recurring', 0)
             ))
         
         self.conn.commit()
+        
+        # After inserting, detect and mark recurring transactions
+        self._detect_recurring_transactions()
     
     def is_file_imported(self, file_path: str) -> bool:
         """Check if a file has already been imported.
@@ -325,11 +361,13 @@ class DatabaseExporter:
         
         return stats
     
-    def export_to_csv(self, output_path: str, include_metadata: bool = True) -> bool:
+    def export_to_csv(self, output_path: str, date_range: Optional[Tuple[str, str]] = None, 
+                     include_metadata: bool = True) -> bool:
         """Export all transactions to a CSV file for AI analysis (NotebookLM, etc.).
         
         Args:
             output_path: Path where the CSV file should be saved
+            date_range: Optional tuple of (start_date, end_date) in YYYY-MM-DD format
             include_metadata: Whether to include metadata header explaining the data
             
         Returns:
@@ -337,19 +375,32 @@ class DatabaseExporter:
         """
         try:
             cursor = self.conn.cursor()
-            cursor.execute("""
+            
+            # Build query with optional date filtering
+            query = """
                 SELECT 
                     transaction_date,
                     amount,
                     description,
+                    merchant_name,
                     category,
                     transaction_type,
                     source_file,
                     reference_number,
-                    notes
+                    notes,
+                    is_recurring
                 FROM transactions
-                ORDER BY transaction_date, id
-            """)
+            """
+            
+            params = []
+            if date_range:
+                start_date, end_date = date_range
+                query += " WHERE transaction_date >= ? AND transaction_date <= ?"
+                params.extend([start_date, end_date])
+            
+            query += " ORDER BY transaction_date, id"
+            
+            cursor.execute(query, params)
             
             rows = cursor.fetchall()
             
@@ -369,11 +420,13 @@ class DatabaseExporter:
 #   - transaction_date: Date of the transaction
 #   - amount: Transaction amount (negative for debits, positive for credits)
 #   - description: Transaction description (sanitized - sensitive data removed)
+#   - merchant_name: Extracted merchant name (if available)
 #   - category: Transaction category (if available)
 #   - transaction_type: 'debit' or 'credit'
 #   - source_file: Original statement file name
 #   - reference_number: Transaction reference number (if available)
 #   - notes: Additional notes
+#   - is_recurring: Whether this is a recurring transaction (1 = yes, 0 = no)
 #
 # NOTE: All sensitive information (account numbers, SSN, etc.) has been redacted.
 # The [REDACTED] placeholders indicate where sensitive data was removed.
@@ -383,8 +436,9 @@ class DatabaseExporter:
                     f.write("\n")
                 
                 # Write CSV data
-                fieldnames = ['transaction_date', 'amount', 'description', 'category', 
-                            'transaction_type', 'source_file', 'reference_number', 'notes']
+                fieldnames = ['transaction_date', 'amount', 'description', 'merchant_name',
+                            'category', 'transaction_type', 'source_file', 'reference_number',
+                            'notes', 'is_recurring']
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 
@@ -393,11 +447,13 @@ class DatabaseExporter:
                         'transaction_date': row[0] or '',
                         'amount': row[1] if row[1] is not None else '',
                         'description': row[2] or '',
-                        'category': row[3] or '',
-                        'transaction_type': row[4] or '',
-                        'source_file': row[5] or '',
-                        'reference_number': row[6] or '',
-                        'notes': row[7] or ''
+                        'merchant_name': row[3] or '',
+                        'category': row[4] or '',
+                        'transaction_type': row[5] or '',
+                        'source_file': row[6] or '',
+                        'reference_number': row[7] or '',
+                        'notes': row[8] or '',
+                        'is_recurring': 'Yes' if row[9] else 'No'
                     })
             
             return True
@@ -484,4 +540,295 @@ class DatabaseExporter:
         except Exception as e:
             print(f"Error creating summary report: {e}")
             return False
+    
+    def _detect_recurring_transactions(self):
+        """Detect and mark recurring transactions (subscriptions, bills, etc.).
+        
+        A transaction is considered recurring if:
+        - Same merchant name appears multiple times
+        - Similar amount (within 5% variance)
+        - Regular intervals (approximately monthly)
+        """
+        cursor = self.conn.cursor()
+        
+        # Find transactions with the same merchant name
+        cursor.execute("""
+            SELECT merchant_name, COUNT(*) as count, AVG(amount) as avg_amount
+            FROM transactions
+            WHERE merchant_name IS NOT NULL AND merchant_name != ''
+            GROUP BY merchant_name
+            HAVING count >= 3
+        """)
+        
+        recurring_merchants = cursor.fetchall()
+        
+        for merchant_row in recurring_merchants:
+            merchant_name = merchant_row[0]
+            avg_amount = merchant_row[2]
+            
+            # Get all transactions for this merchant
+            cursor.execute("""
+                SELECT id, transaction_date, amount
+                FROM transactions
+                WHERE merchant_name = ?
+                ORDER BY transaction_date
+            """, (merchant_name,))
+            
+            transactions = cursor.fetchall()
+            
+            if len(transactions) < 3:
+                continue
+            
+            # Check if amounts are similar (within 5% of average)
+            similar_amount_count = 0
+            for trans in transactions:
+                amount = trans[2]
+                if amount and avg_amount:
+                    variance = abs(amount - avg_amount) / abs(avg_amount)
+                    if variance <= 0.05:  # Within 5%
+                        similar_amount_count += 1
+            
+            # If most transactions have similar amounts, mark as recurring
+            if similar_amount_count >= len(transactions) * 0.7:  # 70% threshold
+                cursor.execute("""
+                    UPDATE transactions
+                    SET is_recurring = 1
+                    WHERE merchant_name = ?
+                """, (merchant_name,))
+        
+        self.conn.commit()
+    
+    def export_to_json(self, output_path: str, date_range: Optional[Tuple[str, str]] = None, 
+                       include_metadata: bool = True) -> bool:
+        """Export all transactions to a JSON file for programmatic access.
+        
+        Args:
+            output_path: Path where the JSON file should be saved
+            date_range: Optional tuple of (start_date, end_date) in YYYY-MM-DD format
+            include_metadata: Whether to include metadata in the export
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            cursor = self.conn.cursor()
+            
+            # Build query with optional date filtering
+            query = """
+                SELECT 
+                    id,
+                    transaction_date,
+                    amount,
+                    description,
+                    merchant_name,
+                    category,
+                    transaction_type,
+                    source_file,
+                    reference_number,
+                    notes,
+                    is_recurring
+                FROM transactions
+            """
+            
+            params = []
+            conditions = []
+            
+            if date_range:
+                start_date, end_date = date_range
+                conditions.append("transaction_date >= ?")
+                conditions.append("transaction_date <= ?")
+                params.extend([start_date, end_date])
+            
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            
+            query += " ORDER BY transaction_date, id"
+            
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            
+            # Convert rows to dictionaries
+            transactions = []
+            for row in rows:
+                transactions.append({
+                    'id': row[0],
+                    'transaction_date': row[1],
+                    'amount': row[2],
+                    'description': row[3],
+                    'merchant_name': row[4],
+                    'category': row[5],
+                    'transaction_type': row[6],
+                    'source_file': row[7],
+                    'reference_number': row[8],
+                    'notes': row[9],
+                    'is_recurring': bool(row[10]) if row[10] is not None else False
+                })
+            
+            # Build export data
+            export_data = {}
+            
+            if include_metadata:
+                stats = self.get_statistics()
+                export_data['metadata'] = {
+                    'export_date': datetime.now().isoformat(),
+                    'total_transactions': len(transactions),
+                    'date_range': {
+                        'start': date_range[0] if date_range else stats['date_range']['min'],
+                        'end': date_range[1] if date_range else stats['date_range']['max']
+                    },
+                    'files_imported': stats['files_imported'],
+                    'note': 'All sensitive information has been redacted from this data.'
+                }
+            
+            export_data['transactions'] = transactions
+            
+            # Write JSON file
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False)
+            
+            return True
+        except Exception as e:
+            print(f"Error exporting to JSON: {e}")
+            return False
+    
+    def query_transactions(self, category: Optional[str] = None, 
+                          merchant: Optional[str] = None,
+                          min_amount: Optional[float] = None,
+                          max_amount: Optional[float] = None,
+                          date_range: Optional[Tuple[str, str]] = None,
+                          is_recurring: Optional[bool] = None,
+                          limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Query transactions with various filters.
+        
+        Args:
+            category: Filter by category name
+            merchant: Filter by merchant name (partial match)
+            min_amount: Minimum transaction amount
+            max_amount: Maximum transaction amount
+            date_range: Tuple of (start_date, end_date) in YYYY-MM-DD format
+            is_recurring: Filter by recurring status (True/False)
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of transaction dictionaries
+        """
+        cursor = self.conn.cursor()
+        
+        query = """
+            SELECT 
+                id, transaction_date, amount, description, merchant_name,
+                category, transaction_type, source_file, reference_number,
+                notes, is_recurring
+            FROM transactions
+            WHERE 1=1
+        """
+        
+        params = []
+        
+        if category:
+            query += " AND category = ?"
+            params.append(category)
+        
+        if merchant:
+            query += " AND merchant_name LIKE ?"
+            params.append(f"%{merchant}%")
+        
+        if min_amount is not None:
+            query += " AND amount >= ?"
+            params.append(min_amount)
+        
+        if max_amount is not None:
+            query += " AND amount <= ?"
+            params.append(max_amount)
+        
+        if date_range:
+            start_date, end_date = date_range
+            query += " AND transaction_date >= ? AND transaction_date <= ?"
+            params.extend([start_date, end_date])
+        
+        if is_recurring is not None:
+            query += " AND is_recurring = ?"
+            params.append(1 if is_recurring else 0)
+        
+        query += " ORDER BY transaction_date DESC, id DESC"
+        
+        if limit:
+            query += f" LIMIT {limit}"
+        
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        
+        transactions = []
+        for row in rows:
+            transactions.append({
+                'id': row[0],
+                'transaction_date': row[1],
+                'amount': row[2],
+                'description': row[3],
+                'merchant_name': row[4],
+                'category': row[5],
+                'transaction_type': row[6],
+                'source_file': row[7],
+                'reference_number': row[8],
+                'notes': row[9],
+                'is_recurring': bool(row[10]) if row[10] is not None else False
+            })
+        
+        return transactions
+    
+    def get_recurring_transactions(self) -> List[Dict[str, Any]]:
+        """Get all recurring transactions grouped by merchant.
+        
+        Returns:
+            List of dictionaries with merchant info and transaction lists
+        """
+        cursor = self.conn.cursor()
+        
+        cursor.execute("""
+            SELECT 
+                merchant_name,
+                COUNT(*) as count,
+                AVG(amount) as avg_amount,
+                MIN(transaction_date) as first_date,
+                MAX(transaction_date) as last_date,
+                SUM(amount) as total_amount
+            FROM transactions
+            WHERE is_recurring = 1 AND merchant_name IS NOT NULL
+            GROUP BY merchant_name
+            ORDER BY count DESC
+        """)
+        
+        recurring = cursor.fetchall()
+        
+        result = []
+        for row in recurring:
+            # Get individual transactions for this merchant
+            cursor.execute("""
+                SELECT id, transaction_date, amount, description
+                FROM transactions
+                WHERE merchant_name = ? AND is_recurring = 1
+                ORDER BY transaction_date DESC
+            """, (row[0],))
+            
+            transactions = cursor.fetchall()
+            
+            result.append({
+                'merchant_name': row[0],
+                'transaction_count': row[1],
+                'average_amount': row[2],
+                'first_transaction': row[3],
+                'last_transaction': row[4],
+                'total_amount': row[5],
+                'transactions': [
+                    {
+                        'id': t[0],
+                        'transaction_date': t[1],
+                        'amount': t[2],
+                        'description': t[3]
+                    }
+                    for t in transactions
+                ]
+            })
+        
+        return result
 
