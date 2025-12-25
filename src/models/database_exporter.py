@@ -952,11 +952,13 @@ class DatabaseExporter:
                     'description': row[3],
                     'merchant_name': row[4],
                     'category': row[5],
-                    'transaction_type': row[6],
-                    'source_file': row[7],
-                    'reference_number': row[8],
-                    'notes': row[9],
-                    'is_recurring': bool(row[10]) if row[10] is not None else False
+                    'account_type': row[6],
+                    'bank_name': row[7],
+                    'transaction_type': row[8],
+                    'source_file': row[9],
+                    'reference_number': row[10],
+                    'notes': row[11],
+                    'is_recurring': bool(row[12]) if row[12] is not None else False
                 })
             
             # Build export data
