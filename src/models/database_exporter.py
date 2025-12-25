@@ -302,6 +302,25 @@ class DatabaseExporter:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tax_doc_year ON tax_documents(tax_year)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tax_doc_source ON tax_documents(source_file)")
         
+        # Budgets table - track monthly budgets by category
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS budgets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                month TEXT NOT NULL,
+                year INTEGER NOT NULL,
+                budget_amount REAL NOT NULL,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(category, month, year)
+            )
+        """)
+        
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_budget_category ON budgets(category)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_budget_month_year ON budgets(year, month)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_budget_active ON budgets(is_active)")
+        
         self.conn.commit()
     
     def _detect_bank_name(self, text: str, source_file: str) -> Optional[str]:

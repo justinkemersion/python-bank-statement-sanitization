@@ -1133,6 +1133,154 @@ def handle_query_mode(args, cli: CLIView):
         db_exporter.close()
         return
     
+    # Handle set budget
+    if args.set_budget:
+        category, month, year_str, amount_str = args.set_budget
+        try:
+            year = int(year_str)
+            amount = float(amount_str)
+            
+            if db_exporter.set_budget(category, month, year, amount):
+                cli.print(f"✓ Budget set: {category} - ${amount:,.2f} for {month}/{year}", MessageLevel.SUCCESS)
+            else:
+                cli.print(f"✗ Failed to set budget. Check category name and month format.", MessageLevel.ERROR)
+        except ValueError:
+            cli.print(f"✗ Invalid year or amount format", MessageLevel.ERROR)
+        
+        db_exporter.close()
+        return
+    
+    # Handle budget status
+    if args.budget_status is not None:
+        from datetime import datetime
+        
+        if len(args.budget_status) == 0:
+            # Current month
+            now = datetime.now()
+            month = f"{now.month:02d}"
+            year = now.year
+        elif len(args.budget_status) == 2:
+            month, year_str = args.budget_status
+            try:
+                year = int(year_str)
+            except ValueError:
+                cli.print(f"✗ Invalid year format", MessageLevel.ERROR)
+                db_exporter.close()
+                return
+        else:
+            cli.print(f"✗ Invalid arguments. Use: --budget-status [MONTH YEAR]", MessageLevel.ERROR)
+            db_exporter.close()
+            return
+        
+        cli.print_header(f"Budget Status - {month}/{year}")
+        status_list = db_exporter.get_budget_status(month, year)
+        
+        if not status_list:
+            cli.print(f"No budgets set for {month}/{year}. Use --set-budget to create budgets.", MessageLevel.INFO)
+        else:
+            total_budget = sum(s['budget'] for s in status_list)
+            total_spent = sum(s['spent'] for s in status_list)
+            total_remaining = total_budget - total_spent
+            
+            cli.print(f"Total Budget: ${total_budget:,.2f}", MessageLevel.INFO)
+            cli.print(f"Total Spent: ${total_spent:,.2f}", MessageLevel.INFO)
+            cli.print(f"Total Remaining: ${total_remaining:,.2f}", MessageLevel.INFO if total_remaining >= 0 else MessageLevel.WARNING)
+            cli.print("", MessageLevel.INFO)
+            
+            # Sort by percentage (highest first)
+            status_list.sort(key=lambda x: x['percentage'], reverse=True)
+            
+            for status in status_list:
+                category = status['category']
+                budget = status['budget']
+                spent = status['spent']
+                remaining = status['remaining']
+                percentage = status['percentage']
+                status_icon = "⚠️" if status['status'] == 'over' else "✓"
+                
+                cli.print(f"{status_icon} {category:<25} "
+                         f"Budget: ${budget:>8,.2f}  "
+                         f"Spent: ${spent:>8,.2f}  "
+                         f"Remaining: ${remaining:>8,.2f}  "
+                         f"({percentage:.1f}%)", 
+                         MessageLevel.WARNING if status['status'] == 'over' else MessageLevel.INFO)
+        
+        db_exporter.close()
+        return
+    
+    # Handle budget report
+    if args.budget_report:
+        from datetime import datetime
+        from collections import defaultdict
+        
+        cli.print_header("Generating Budget Report")
+        report_path = os.path.abspath(args.budget_report)
+        
+        try:
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write("BUDGET REPORT\n")
+                f.write("=" * 80 + "\n\n")
+                
+                # Get all budgets
+                all_budgets = db_exporter.get_all_budgets()
+                
+                if not all_budgets:
+                    f.write("No budgets set. Use --set-budget to create budgets.\n")
+                else:
+                    # Group by year and month
+                    by_period = defaultdict(list)
+                    for budget in all_budgets:
+                        key = f"{budget['year']}-{budget['month']}"
+                        by_period[key].append(budget)
+                    
+                    # Write report by period
+                    for period in sorted(by_period.keys()):
+                        year, month = period.split('-')
+                        month_name = datetime(int(year), int(month), 1).strftime('%B')
+                        
+                        f.write(f"{month_name} {year}\n")
+                        f.write("-" * 80 + "\n")
+                        
+                        budgets = by_period[period]
+                        status_list = db_exporter.get_budget_status(month, int(year))
+                        
+                        # Create lookup for status
+                        status_map = {s['category']: s for s in status_list}
+                        
+                        total_budget = sum(b['budget_amount'] for b in budgets)
+                        total_spent = sum(status_map.get(b['category'], {}).get('spent', 0) for b in budgets)
+                        
+                        f.write(f"Total Budget: ${total_budget:,.2f}\n")
+                        f.write(f"Total Spent: ${total_spent:,.2f}\n")
+                        f.write(f"Total Remaining: ${total_budget - total_spent:,.2f}\n\n")
+                        
+                        f.write("By Category:\n")
+                        for budget in sorted(budgets, key=lambda x: x['category']):
+                            category = budget['category']
+                            budget_amount = budget['budget_amount']
+                            status = status_map.get(category, {})
+                            spent = status.get('spent', 0)
+                            remaining = budget_amount - spent
+                            percentage = (spent / budget_amount * 100) if budget_amount > 0 else 0
+                            
+                            f.write(f"  {category:<25} "
+                                   f"Budget: ${budget_amount:>10,.2f}  "
+                                   f"Spent: ${spent:>10,.2f}  "
+                                   f"Remaining: ${remaining:>10,.2f}  "
+                                   f"({percentage:.1f}%)\n")
+                        
+                        f.write("\n")
+                
+                f.write("=" * 80 + "\n")
+                f.write("Generated by Bank Statement Sanitizer\n")
+            
+            cli.print(f"✓ Budget report exported: {report_path}", MessageLevel.SUCCESS)
+        except Exception as e:
+            cli.print(f"✗ Failed to export budget report: {e}", MessageLevel.ERROR)
+        
+        db_exporter.close()
+        return
+    
     # Query transactions
     cli.print_header("Query Results")
     
@@ -1172,7 +1320,7 @@ def main():
     cli = CLIView(verbose=args.verbose, quiet=args.quiet, dry_run=args.dry_run)
     
     # Handle query mode (if --query-db is specified)
-    if args.query_db or args.list_recurring or args.spending_report or args.top_categories or args.top_merchants or args.debt_payoff or args.show_debts or args.show_bills or args.upcoming_bills or args.show_investments or args.show_holdings or args.show_income or args.income_trends or args.validate_data or args.check_duplicates or args.tax_summary is not None or args.tax_deductions is not None or args.export_tax_report:
+    if args.query_db or args.list_recurring or args.spending_report or args.top_categories or args.top_merchants or args.debt_payoff or args.show_debts or args.show_bills or args.upcoming_bills or args.show_investments or args.show_holdings or args.show_income or args.income_trends or args.validate_data or args.check_duplicates or args.tax_summary is not None or args.tax_deductions is not None or args.export_tax_report or args.set_budget or args.budget_status is not None or args.budget_report:
         handle_query_mode(args, cli)
         sys.exit(0)
     
