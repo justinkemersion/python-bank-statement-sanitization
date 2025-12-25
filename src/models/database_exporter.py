@@ -35,7 +35,6 @@ class DatabaseExporter:
         self.balance_extractor = BalanceExtractor()
         self.investment_extractor = InvestmentExtractor()
         self.tax_extractor = TaxDocumentExtractor()
-        self.paystub_extractor = PaystubExtractor()
     
     def connect(self):
         """Connect to the database."""
@@ -739,42 +738,51 @@ class DatabaseExporter:
         inserted_count = 0
         skipped_count = 0
         
-        for transaction in transactions:
-            # Check for duplicates if enabled
-            if skip_duplicates and self._is_duplicate_transaction(transaction, cursor):
-                skipped_count += 1
-                continue
+        try:
+            for transaction in transactions:
+                # Check for duplicates if enabled
+                if skip_duplicates and self._is_duplicate_transaction(transaction, cursor):
+                    skipped_count += 1
+                    continue
+                
+                cursor.execute("""
+                    INSERT INTO transactions 
+                    (source_file, transaction_date, amount, description, merchant_name, category, 
+                     account_type, bank_name, transaction_type, reference_number, notes, is_recurring)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    transaction.get('source_file'),
+                    transaction.get('transaction_date'),
+                    transaction.get('amount'),
+                    transaction.get('description'),
+                    transaction.get('merchant_name'),
+                    transaction.get('category'),
+                    transaction.get('account_type'),
+                    transaction.get('bank_name'),
+                    transaction.get('transaction_type'),
+                    transaction.get('reference_number'),
+                    transaction.get('notes'),
+                    transaction.get('is_recurring', 0)
+                ))
+                inserted_count += 1
             
-            cursor.execute("""
-                INSERT INTO transactions 
-                (source_file, transaction_date, amount, description, merchant_name, category, 
-                 account_type, bank_name, transaction_type, reference_number, notes, is_recurring)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                transaction.get('source_file'),
-                transaction.get('transaction_date'),
-                transaction.get('amount'),
-                transaction.get('description'),
-                transaction.get('merchant_name'),
-                transaction.get('category'),
-                transaction.get('account_type'),
-                transaction.get('bank_name'),
-                transaction.get('transaction_type'),
-                transaction.get('reference_number'),
-                transaction.get('notes'),
-                transaction.get('is_recurring', 0)
-            ))
-            inserted_count += 1
-        
-        self.conn.commit()
-        
-        # After inserting, detect and mark recurring transactions
-        if inserted_count > 0:
-            self._detect_recurring_transactions()
-            # Update bills table from recurring transactions
-            self.update_bills_from_recurring_transactions()
-        
-        return {'inserted': inserted_count, 'skipped': skipped_count}
+            self.conn.commit()
+            
+            # After inserting, detect and mark recurring transactions
+            if inserted_count > 0:
+                try:
+                    self._detect_recurring_transactions()
+                    # Update bills table from recurring transactions
+                    self.update_bills_from_recurring_transactions()
+                except Exception as e:
+                    # Log but don't fail - recurring detection is not critical
+                    print(f"Warning: Failed to detect recurring transactions: {e}")
+            
+            return {'inserted': inserted_count, 'skipped': skipped_count}
+        except Exception as e:
+            self.conn.rollback()
+            print(f"Error inserting transactions: {e}")
+            return {'inserted': 0, 'skipped': skipped_count}
     
     def is_file_imported(self, file_path: str) -> bool:
         """Check if a file has already been imported.
@@ -1640,26 +1648,31 @@ class DatabaseExporter:
                     return False  # Duplicate found
         
         # Insert balance
-        cursor.execute("""
-            INSERT INTO account_balances 
-            (source_file, statement_date, balance, available_credit, credit_limit,
-             minimum_payment, payment_due_date, apr, account_type, bank_name)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            balance.get('source_file'),
-            balance.get('statement_date'),
-            balance.get('balance'),
-            balance.get('available_credit'),
-            balance.get('credit_limit'),
-            balance.get('minimum_payment'),
-            balance.get('payment_due_date'),
-            balance.get('apr'),
-            balance.get('account_type'),
-            balance.get('bank_name'),
-        ))
-        
-        self.conn.commit()
-        return True
+        try:
+            cursor.execute("""
+                INSERT INTO account_balances 
+                (source_file, statement_date, balance, available_credit, credit_limit,
+                 minimum_payment, payment_due_date, apr, account_type, bank_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                balance.get('source_file'),
+                balance.get('statement_date'),
+                balance.get('balance'),
+                balance.get('available_credit'),
+                balance.get('credit_limit'),
+                balance.get('minimum_payment'),
+                balance.get('payment_due_date'),
+                balance.get('apr'),
+                balance.get('account_type'),
+                balance.get('bank_name'),
+            ))
+            
+            self.conn.commit()
+            return True
+        except Exception as e:
+            self.conn.rollback()
+            print(f"Error inserting balance: {e}")
+            return False
     
     def get_balance_history(self, bank_name: Optional[str] = None, account_type: Optional[str] = None,
                            limit: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -1946,6 +1959,84 @@ class DatabaseExporter:
         
         return result
     
+    def extract_tax_document_from_text(self, text: str, source_file: str) -> Optional[Dict[str, Any]]:
+        """Extract tax document data from sanitized text.
+        
+        Args:
+            text: Sanitized text content
+            source_file: Source file name
+            
+        Returns:
+            Dictionary with tax document data, or None if not a tax document
+        """
+        return self.tax_extractor.extract(text, source_file)
+    
+    def insert_tax_document(self, tax_doc: Dict[str, Any], skip_duplicates: bool = True) -> Optional[int]:
+        """Insert a tax document into the database.
+        
+        Args:
+            tax_doc: Dictionary with tax document data
+            skip_duplicates: If True, skip if document already exists (same document_type, tax_year, source_file)
+            
+        Returns:
+            Document ID if inserted, None if skipped or failed
+        """
+        if not tax_doc:
+            return None
+        
+        cursor = self.conn.cursor()
+        
+        # Check for duplicates if enabled
+        if skip_duplicates:
+            doc_type = tax_doc.get('document_type')
+            tax_year = tax_doc.get('tax_year')
+            source_file = tax_doc.get('source_file')
+            if doc_type and tax_year and source_file:
+                cursor.execute("""
+                    SELECT id FROM tax_documents
+                    WHERE document_type = ? AND tax_year = ? AND source_file = ?
+                """, (doc_type, tax_year, source_file))
+                existing = cursor.fetchone()
+                if existing:
+                    return None  # Duplicate found
+        
+        # Insert tax document
+        try:
+            cursor.execute("""
+                INSERT INTO tax_documents 
+                (source_file, document_type, tax_year, payer_name, interest_income, 
+                 ordinary_dividends, qualified_dividends, total_capital_gain, capital_gain_distributions,
+                 federal_tax_withheld, state_tax_withheld, wages, state_wages, 
+                 local_wages, social_security_wages, medicare_wages, data_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                tax_doc.get('source_file'),
+                tax_doc.get('document_type'),
+                tax_doc.get('tax_year'),
+                tax_doc.get('payer_name'),
+                tax_doc.get('interest_income'),
+                tax_doc.get('ordinary_dividends'),
+                tax_doc.get('qualified_dividends'),
+                tax_doc.get('total_capital_gain'),
+                tax_doc.get('capital_gain_distributions'),
+                tax_doc.get('federal_tax_withheld'),
+                tax_doc.get('state_tax_withheld'),
+                tax_doc.get('wages'),
+                tax_doc.get('state_wages'),
+                tax_doc.get('local_wages'),
+                tax_doc.get('social_security_wages'),
+                tax_doc.get('medicare_wages'),
+                json.dumps(tax_doc) if tax_doc else None,
+            ))
+            
+            doc_id = cursor.lastrowid
+            self.conn.commit()
+            return doc_id
+        except Exception as e:
+            self.conn.rollback()
+            print(f"Error inserting tax document: {e}")
+            return None
+    
     def extract_paystub_from_text(self, text: str, source_file: str) -> List[Dict[str, Any]]:
         """Extract paystub data from sanitized text (handles multiple paystubs).
         
@@ -1992,36 +2083,41 @@ class DatabaseExporter:
                     return False  # Duplicate found
         
         # Insert paystub
-        cursor.execute("""
-            INSERT INTO paystubs 
-            (source_file, pay_date, pay_period_start, pay_period_end, employer_name,
-             gross_pay, regular_hours, overtime_hours, regular_rate, overtime_rate,
-             bonus, commission, deductions_json, total_deductions, net_pay,
-             ytd_gross, ytd_net, ytd_taxes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            paystub.get('source_file'),
-            paystub.get('pay_date'),
-            paystub.get('pay_period_start'),
-            paystub.get('pay_period_end'),
-            paystub.get('employer_name'),
-            paystub.get('gross_pay'),
-            paystub.get('regular_hours'),
-            paystub.get('overtime_hours'),
-            paystub.get('regular_rate'),
-            paystub.get('overtime_rate'),
-            paystub.get('bonus'),
-            paystub.get('commission'),
-            paystub.get('deductions_json'),
-            paystub.get('total_deductions'),
-            paystub.get('net_pay'),
-            paystub.get('ytd_gross'),
-            paystub.get('ytd_net'),
-            paystub.get('ytd_taxes'),
-        ))
-        
-        self.conn.commit()
-        return True
+        try:
+            cursor.execute("""
+                INSERT INTO paystubs 
+                (source_file, pay_date, pay_period_start, pay_period_end, employer_name,
+                 gross_pay, regular_hours, overtime_hours, regular_rate, overtime_rate,
+                 bonus, commission, deductions_json, total_deductions, net_pay,
+                 ytd_gross, ytd_net, ytd_taxes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                paystub.get('source_file'),
+                paystub.get('pay_date'),
+                paystub.get('pay_period_start'),
+                paystub.get('pay_period_end'),
+                paystub.get('employer_name'),
+                paystub.get('gross_pay'),
+                paystub.get('regular_hours'),
+                paystub.get('overtime_hours'),
+                paystub.get('regular_rate'),
+                paystub.get('overtime_rate'),
+                paystub.get('bonus'),
+                paystub.get('commission'),
+                paystub.get('deductions_json'),
+                paystub.get('total_deductions'),
+                paystub.get('net_pay'),
+                paystub.get('ytd_gross'),
+                paystub.get('ytd_net'),
+                paystub.get('ytd_taxes'),
+            ))
+            
+            self.conn.commit()
+            return True
+        except Exception as e:
+            self.conn.rollback()
+            print(f"Error inserting paystub: {e}")
+            return False
     
     def get_paystub_statistics(self) -> Dict[str, Any]:
         """Get statistics about paystubs in the database.
