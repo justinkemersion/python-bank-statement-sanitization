@@ -200,6 +200,29 @@ Examples:
         help="Show top N merchants by spending (requires --query-db)"
     )
     
+    # Debt payoff calculator arguments
+    parser.add_argument(
+        "--debt-payoff",
+        dest="debt_payoff",
+        type=float,
+        help="Calculate debt payoff strategy (specify monthly payment amount, requires --query-db)"
+    )
+    
+    parser.add_argument(
+        "--payoff-strategy",
+        dest="payoff_strategy",
+        choices=['snowball', 'avalanche', 'compare'],
+        default='compare',
+        help="Debt payoff strategy: 'snowball' (smallest first), 'avalanche' (highest APR first), or 'compare' (both)"
+    )
+    
+    parser.add_argument(
+        "--show-debts",
+        dest="show_debts",
+        action="store_true",
+        help="Show current debt balances (requires --query-db)"
+    )
+    
     parser.add_argument(
         "--version",
         action="version",
@@ -429,6 +452,26 @@ def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_
                                 elif skipped_count > 0:
                                     if cli.verbose:
                                         cli.print(f"  All {len(paystubs)} paystub(s) already exist in database", MessageLevel.DEBUG)
+                        
+                        # Extract balance information (for statements, not paystubs)
+                        if not paystubs and ext.lower() in ['.pdf', '.txt']:
+                            # Detect account type and bank name first
+                            account_type = db_exporter._detect_account_type(sanitized_text, os.path.basename(file_path))
+                            bank_name = db_exporter._detect_bank_name(sanitized_text, os.path.basename(file_path))
+                            
+                            # Extract balance
+                            balance = db_exporter.extract_balance_from_text(sanitized_text, os.path.basename(file_path), 
+                                                                           account_type, bank_name)
+                            if balance:
+                                inserted = db_exporter.insert_balance(balance, skip_duplicates=True)
+                                if inserted:
+                                    if cli.verbose:
+                                        balance_info = f"Balance: ${balance.get('balance', 0):,.2f}"
+                                        if balance.get('credit_limit'):
+                                            balance_info += f", Limit: ${balance.get('credit_limit', 0):,.2f}"
+                                        if balance.get('minimum_payment'):
+                                            balance_info += f", Min Payment: ${balance.get('minimum_payment', 0):,.2f}"
+                                        cli.print(f"  Extracted account balance: {balance_info}", MessageLevel.DEBUG)
                         
                         # Extract transactions (skip if this was a paystub)
                         if not paystubs:
@@ -668,6 +711,26 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metada
                                         if cli.verbose:
                                             cli.print(f"  All {len(paystubs)} paystub(s) already exist in database", MessageLevel.DEBUG)
                             
+                            # Extract balance information (for statements, not paystubs)
+                            if not paystubs and ext.lower() in ['.pdf', '.txt']:
+                                # Detect account type and bank name first
+                                account_type = db_exporter._detect_account_type(sanitized_text, os.path.basename(file_path))
+                                bank_name = db_exporter._detect_bank_name(sanitized_text, os.path.basename(file_path))
+                                
+                                # Extract balance
+                                balance = db_exporter.extract_balance_from_text(sanitized_text, os.path.basename(file_path), 
+                                                                               account_type, bank_name)
+                                if balance:
+                                    inserted = db_exporter.insert_balance(balance, skip_duplicates=True)
+                                    if inserted:
+                                        if cli.verbose:
+                                            balance_info = f"Balance: ${balance.get('balance', 0):,.2f}"
+                                            if balance.get('credit_limit'):
+                                                balance_info += f", Limit: ${balance.get('credit_limit', 0):,.2f}"
+                                            if balance.get('minimum_payment'):
+                                                balance_info += f", Min Payment: ${balance.get('minimum_payment', 0):,.2f}"
+                                            cli.print(f"  Extracted account balance: {balance_info}", MessageLevel.DEBUG)
+                            
                             # Extract transactions (skip if this was a paystub)
                             if not paystubs:
                                 if ext.lower() == '.csv':
@@ -746,6 +809,94 @@ def handle_query_mode(args, cli: CLIView):
         except ValueError as e:
             cli.print(f"Error: {e}", MessageLevel.ERROR)
             sys.exit(1)
+    
+    # Handle show debts
+    if args.show_debts:
+        cli.print_header("Current Debt Balances")
+        debts = db_exporter.get_current_debts()
+        
+        if not debts:
+            cli.print("No debt found in database.", MessageLevel.INFO)
+        else:
+            total_debt = sum(d.get('balance', 0) for d in debts)
+            cli.print(f"Total Debt: ${total_debt:,.2f}", MessageLevel.INFO)
+            cli.print("", MessageLevel.INFO)
+            
+            for i, debt in enumerate(debts, 1):
+                cli.print(f"{i}. {debt.get('bank_name', 'Unknown'):<25} ${debt.get('balance', 0):>12,.2f}", MessageLevel.INFO)
+                if debt.get('apr'):
+                    cli.print(f"   APR: {debt.get('apr', 0):.2f}%", MessageLevel.DEBUG)
+                if debt.get('minimum_payment'):
+                    cli.print(f"   Min Payment: ${debt.get('minimum_payment', 0):,.2f}", MessageLevel.DEBUG)
+                if debt.get('payment_due_date'):
+                    cli.print(f"   Due Date: {debt.get('payment_due_date', 'N/A')}", MessageLevel.DEBUG)
+        
+        db_exporter.close()
+        return
+    
+    # Handle debt payoff calculation
+    if args.debt_payoff:
+        cli.print_header("Debt Payoff Strategy")
+        result = db_exporter.calculate_debt_payoff(args.debt_payoff, args.payoff_strategy)
+        
+        if 'error' in result:
+            cli.print(result['error'], MessageLevel.ERROR)
+            db_exporter.close()
+            return
+        
+        if args.payoff_strategy == 'compare':
+            # Show comparison
+            snowball = result.get('snowball', {})
+            avalanche = result.get('avalanche', {})
+            recommendation = result.get('recommendation', '')
+            
+            cli.print("", MessageLevel.INFO)
+            cli.print("SNOWBALL STRATEGY (Pay smallest balance first):", MessageLevel.INFO)
+            cli.print(f"  Total Debt: ${snowball.get('total_debt', 0):,.2f}", MessageLevel.INFO)
+            cli.print(f"  Total Interest: ${snowball.get('total_interest', 0):,.2f}", MessageLevel.INFO)
+            cli.print(f"  Months to Payoff: {snowball.get('months_to_payoff', 0)}", MessageLevel.INFO)
+            cli.print(f"  Payoff Date: {snowball.get('payoff_date', 'N/A')}", MessageLevel.INFO)
+            cli.print(f"  Total Paid: ${snowball.get('total_paid', 0):,.2f}", MessageLevel.INFO)
+            
+            cli.print("", MessageLevel.INFO)
+            cli.print("AVALANCHE STRATEGY (Pay highest APR first):", MessageLevel.INFO)
+            cli.print(f"  Total Debt: ${avalanche.get('total_debt', 0):,.2f}", MessageLevel.INFO)
+            cli.print(f"  Total Interest: ${avalanche.get('total_interest', 0):,.2f}", MessageLevel.INFO)
+            cli.print(f"  Months to Payoff: {avalanche.get('months_to_payoff', 0)}", MessageLevel.INFO)
+            cli.print(f"  Payoff Date: {avalanche.get('payoff_date', 'N/A')}", MessageLevel.INFO)
+            cli.print(f"  Total Paid: ${avalanche.get('total_paid', 0):,.2f}", MessageLevel.INFO)
+            
+            cli.print("", MessageLevel.INFO)
+            cli.print(f"RECOMMENDATION: {recommendation}", MessageLevel.SUCCESS)
+            
+            # Show payoff plan for recommended strategy
+            if avalanche.get('total_interest', 0) < snowball.get('total_interest', 0):
+                plan = avalanche.get('payoff_plan', [])
+            else:
+                plan = snowball.get('payoff_plan', [])
+        else:
+            # Show single strategy
+            strategy_name = result.get('strategy', '').upper()
+            cli.print(f"{strategy_name} STRATEGY:", MessageLevel.INFO)
+            cli.print(f"  Total Debt: ${result.get('total_debt', 0):,.2f}", MessageLevel.INFO)
+            cli.print(f"  Total Interest: ${result.get('total_interest', 0):,.2f}", MessageLevel.INFO)
+            cli.print(f"  Months to Payoff: {result.get('months_to_payoff', 0)}", MessageLevel.INFO)
+            cli.print(f"  Payoff Date: {result.get('payoff_date', 'N/A')}", MessageLevel.INFO)
+            cli.print(f"  Total Paid: ${result.get('total_paid', 0):,.2f}", MessageLevel.INFO)
+            
+            plan = result.get('payoff_plan', [])
+        
+        if plan:
+            cli.print("", MessageLevel.INFO)
+            cli.print("PAYOFF PLAN:", MessageLevel.INFO)
+            for i, debt_plan in enumerate(plan, 1):
+                cli.print(f"{i}. {debt_plan.get('bank_name', 'Unknown'):<25} "
+                         f"${debt_plan.get('starting_balance', 0):>12,.2f} → "
+                         f"{debt_plan.get('months_to_payoff', 0)} months, "
+                         f"${debt_plan.get('total_interest', 0):,.2f} interest", MessageLevel.INFO)
+        
+        db_exporter.close()
+        return
     
     # Handle list recurring transactions
     if args.list_recurring:
@@ -834,7 +985,7 @@ def main():
     cli = CLIView(verbose=args.verbose, quiet=args.quiet, dry_run=args.dry_run)
     
     # Handle query mode (if --query-db is specified)
-    if args.query_db or args.list_recurring or args.spending_report or args.top_categories or args.top_merchants:
+    if args.query_db or args.list_recurring or args.spending_report or args.top_categories or args.top_merchants or args.debt_payoff or args.show_debts:
         handle_query_mode(args, cli)
         sys.exit(0)
     

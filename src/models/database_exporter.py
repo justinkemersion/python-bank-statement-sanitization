@@ -13,6 +13,7 @@ import re
 from src.models.transaction_categorizer import TransactionCategorizer
 from src.models.merchant_extractor import MerchantExtractor
 from src.models.paystub_extractor import PaystubExtractor
+from src.models.balance_extractor import BalanceExtractor
 
 
 class DatabaseExporter:
@@ -29,6 +30,7 @@ class DatabaseExporter:
         self.categorizer = TransactionCategorizer()
         self.merchant_extractor = MerchantExtractor()
         self.paystub_extractor = PaystubExtractor()
+        self.balance_extractor = BalanceExtractor()
         self.paystub_extractor = PaystubExtractor()
     
     def connect(self):
@@ -156,6 +158,30 @@ class DatabaseExporter:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_paystub_date ON paystubs(pay_date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_paystub_source ON paystubs(source_file)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_paystub_employer ON paystubs(employer_name)")
+        
+        # Account balances table - track account balances over time
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS account_balances (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_file TEXT NOT NULL,
+                statement_date TEXT,
+                balance REAL NOT NULL,
+                available_credit REAL,
+                credit_limit REAL,
+                minimum_payment REAL,
+                payment_due_date TEXT,
+                apr REAL,
+                account_type TEXT,
+                bank_name TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_date ON account_balances(statement_date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_source ON account_balances(source_file)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_bank ON account_balances(bank_name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_type ON account_balances(account_type)")
         
         self.conn.commit()
     
@@ -1067,6 +1093,201 @@ class DatabaseExporter:
             'banks': banks,
             'total_banks': len(set(b[0] for b in banks))
         }
+    
+    def extract_balance_from_text(self, text: str, source_file: str, account_type: Optional[str] = None,
+                                  bank_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Extract balance information from statement text.
+        
+        Args:
+            text: Statement text content
+            source_file: Source file name
+            account_type: Account type (checking, savings, credit_card)
+            bank_name: Bank/issuer name
+            
+        Returns:
+            Dictionary with balance data, or None if not found
+        """
+        return self.balance_extractor.extract_balance(text, source_file, account_type, bank_name)
+    
+    def insert_balance(self, balance: Dict[str, Any], skip_duplicates: bool = True) -> bool:
+        """Insert account balance into the database.
+        
+        Args:
+            balance: Dictionary with balance data
+            skip_duplicates: If True, skip if balance already exists (same statement_date + source_file)
+            
+        Returns:
+            True if inserted, False if skipped or failed
+        """
+        if not balance:
+            return False
+        
+        cursor = self.conn.cursor()
+        
+        # Check for duplicates if enabled
+        if skip_duplicates:
+            statement_date = balance.get('statement_date')
+            source_file = balance.get('source_file')
+            if statement_date and source_file:
+                cursor.execute("""
+                    SELECT COUNT(*) FROM account_balances
+                    WHERE statement_date = ? AND source_file = ?
+                """, (statement_date, source_file))
+                count = cursor.fetchone()[0]
+                if count > 0:
+                    return False  # Duplicate found
+        
+        # Insert balance
+        cursor.execute("""
+            INSERT INTO account_balances 
+            (source_file, statement_date, balance, available_credit, credit_limit,
+             minimum_payment, payment_due_date, apr, account_type, bank_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            balance.get('source_file'),
+            balance.get('statement_date'),
+            balance.get('balance'),
+            balance.get('available_credit'),
+            balance.get('credit_limit'),
+            balance.get('minimum_payment'),
+            balance.get('payment_due_date'),
+            balance.get('apr'),
+            balance.get('account_type'),
+            balance.get('bank_name'),
+        ))
+        
+        self.conn.commit()
+        return True
+    
+    def get_balance_history(self, bank_name: Optional[str] = None, account_type: Optional[str] = None,
+                           limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Get balance history for accounts.
+        
+        Args:
+            bank_name: Filter by bank name
+            account_type: Filter by account type
+            limit: Maximum number of records to return
+            
+        Returns:
+            List of balance records
+        """
+        cursor = self.conn.cursor()
+        
+        query = """
+            SELECT 
+                id, source_file, statement_date, balance, available_credit, credit_limit,
+                minimum_payment, payment_due_date, apr, account_type, bank_name
+            FROM account_balances
+            WHERE 1=1
+        """
+        
+        params = []
+        if bank_name:
+            query += " AND bank_name = ?"
+            params.append(bank_name)
+        
+        if account_type:
+            query += " AND account_type = ?"
+            params.append(account_type)
+        
+        query += " ORDER BY statement_date DESC, id DESC"
+        
+        if limit:
+            query += f" LIMIT {limit}"
+        
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        
+        balances = []
+        for row in rows:
+            balances.append({
+                'id': row[0],
+                'source_file': row[1],
+                'statement_date': row[2],
+                'balance': row[3],
+                'available_credit': row[4],
+                'credit_limit': row[5],
+                'minimum_payment': row[6],
+                'payment_due_date': row[7],
+                'apr': row[8],
+                'account_type': row[9],
+                'bank_name': row[10],
+            })
+        
+        return balances
+    
+    def get_current_debts(self) -> List[Dict[str, Any]]:
+        """Get current debt balances (most recent balance per bank/account).
+        
+        Returns:
+            List of current debt information
+        """
+        cursor = self.conn.cursor()
+        
+        # Get most recent balance for each bank/account combination
+        cursor.execute("""
+            SELECT 
+                bank_name, account_type, balance, credit_limit, available_credit,
+                minimum_payment, payment_due_date, apr, statement_date
+            FROM account_balances
+            WHERE account_type = 'credit_card' AND balance IS NOT NULL
+            AND (bank_name, account_type, statement_date) IN (
+                SELECT bank_name, account_type, MAX(statement_date)
+                FROM account_balances
+                WHERE account_type = 'credit_card'
+                GROUP BY bank_name, account_type
+            )
+            ORDER BY balance DESC
+        """)
+        
+        rows = cursor.fetchall()
+        
+        debts = []
+        for row in rows:
+            debts.append({
+                'bank_name': row[0],
+                'account_type': row[1],
+                'balance': row[2],
+                'credit_limit': row[3],
+                'available_credit': row[4],
+                'minimum_payment': row[5],
+                'payment_due_date': row[6],
+                'apr': row[7],
+                'statement_date': row[8],
+            })
+        
+        return debts
+    
+    def calculate_debt_payoff(self, monthly_payment: float, strategy: str = 'avalanche') -> Dict[str, Any]:
+        """Calculate debt payoff strategy.
+        
+        Args:
+            monthly_payment: Total monthly payment available for debt
+            strategy: 'snowball' or 'avalanche' (default: 'avalanche')
+        
+        Returns:
+            Dictionary with payoff strategy details
+        """
+        from src.models.debt_calculator import DebtCalculator
+        
+        debts = self.get_current_debts()
+        if not debts:
+            return {
+                'error': 'No debt found in database',
+                'debts': []
+            }
+        
+        calculator = DebtCalculator()
+        
+        if strategy.lower() == 'snowball':
+            result = calculator.calculate_snowball_strategy(debts, monthly_payment)
+        elif strategy.lower() == 'avalanche':
+            result = calculator.calculate_avalanche_strategy(debts, monthly_payment)
+        else:
+            # Compare both
+            result = calculator.compare_strategies(debts, monthly_payment)
+        
+        return result
     
     def query_transactions(self, category: Optional[str] = None, 
                           merchant: Optional[str] = None,
