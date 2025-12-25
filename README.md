@@ -28,6 +28,9 @@ This project aims to develop a robust Python application for sanitizing sensitiv
 - **Debt Payoff Calculator:** Calculate optimal debt payoff strategies (snowball vs avalanche) with interest calculations and payoff timelines.
 - **Bill Detection & Reminders:** Automatically detects recurring bills, tracks due dates, and shows upcoming payments.
 - **Payment Due Date Tracking:** Extracts payment due dates from credit card statements to avoid late fees.
+- **Budget Tracking:** Set monthly budgets by category, track spending vs budget, and get alerts when approaching limits.
+- **Financial Goals Tracking:** Set and track financial goals (debt payoff, savings, investments) with progress monitoring.
+- **Cash Flow Forecasting:** Predict future cash flow based on historical patterns and identify potential cash flow issues.
 
 ### Income Tracking
 - **Paystub Support:** Extract structured data from paystubs including gross pay, net pay, deductions, and year-to-date totals.
@@ -47,12 +50,13 @@ This project aims to develop a robust Python application for sanitizing sensitiv
 - **Multiple Export Formats:** Export to CSV (for NotebookLM/AI tools), JSON (for programmatic access), or summary reports.
 - **Incremental Import:** Add new statements to existing database without duplicates (both file-level and transaction-level duplicate prevention).
 - **Spending Analytics:** Generate comprehensive spending reports with monthly trends, category breakdowns, and top merchants.
+- **Data Validation:** Validate data quality, check for duplicates, and ensure data integrity.
 
 ## Architecture
 
 The application is designed with modularity in mind, following a Model-View-Controller (MVC) pattern:
 
-- **Model:** Handles the core logic of reading, parsing, and sanitizing bank statement data. Includes modules for different file types (`pdf_handler.py`, `txt_handler.py`, `csv_handler.py`, `excel_handler.py`), sanitization (`sanitizer.py`), categorization (`transaction_categorizer.py`), merchant extraction (`merchant_extractor.py`), paystub extraction (`paystub_extractor.py`), balance extraction (`balance_extractor.py`), debt calculation (`debt_calculator.py`), and database operations (`database_exporter.py`, `spending_analytics.py`).
+- **Model:** Handles the core logic of reading, parsing, and sanitizing bank statement data. Includes modules for different file types (`pdf_handler.py`, `txt_handler.py`, `csv_handler.py`, `excel_handler.py`), sanitization (`sanitizer.py`), categorization (`transaction_categorizer.py`), merchant extraction (`merchant_extractor.py`), paystub extraction (`paystub_extractor.py`), balance extraction (`balance_extractor.py`), debt calculation (`debt_calculator.py`), tax extraction (`tax_extractor.py`), investment extraction (`investment_extractor.py`), and database operations (`database_exporter.py`, `spending_analytics.py`).
 - **View:** Manages command-line interface presentation (`cli.py`) with colored output, progress bars, and formatted messages.
 - **Controller:** Orchestrates the overall flow through the main entry point (`sanitize.py`), including CLI argument parsing, file discovery, and workflow management.
 
@@ -203,6 +207,10 @@ python sanitize.py ./statements --dry-run
 - `--show-debts`: Show current debt balances across all credit cards
 - `--debt-payoff <amount>`: Calculate debt payoff strategy with specified monthly payment
 - `--payoff-strategy <snowball|avalanche|compare>`: Choose payoff strategy (default: compare)
+
+**Investment Account Options:**
+- `--show-investments`: Show investment account summary (requires --query-db)
+- `--show-holdings`: Show current investment holdings (requires --query-db)
 
 **Bill Management Options:**
 - `--show-bills`: Show all recurring bills detected from transactions
