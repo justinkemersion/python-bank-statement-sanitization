@@ -310,6 +310,83 @@ python sanitize.py --query-db finances.db --upcoming-bills 14
 python sanitize.py --query-db finances.db --upcoming-bills
 ```
 
+**Income Tracking:**
+```bash
+# Show income summary
+python sanitize.py --query-db finances.db --show-income
+
+# Show income trends
+python sanitize.py --query-db finances.db --income-trends
+```
+
+**Data Validation:**
+```bash
+# Validate data quality
+python sanitize.py --query-db finances.db --validate-data
+
+# Check for duplicates
+python sanitize.py --query-db finances.db --check-duplicates
+```
+
+**Investment Accounts:**
+```bash
+# Show investment account summary
+python sanitize.py --query-db finances.db --show-investments
+
+# Show current holdings
+python sanitize.py --query-db finances.db --show-holdings
+```
+
+**Budget Management:**
+```bash
+# Set monthly budgets
+python sanitize.py --query-db finances.db --set-budget Groceries 01 2024 500
+python sanitize.py --query-db finances.db --set-budget Restaurants 01 2024 200
+
+# Check budget status (current month)
+python sanitize.py --query-db finances.db --budget-status
+
+# Check budget status for specific month
+python sanitize.py --query-db finances.db --budget-status 01 2024
+
+# Generate budget report
+python sanitize.py --query-db finances.db --budget-report budget_report.txt
+```
+
+**Financial Goals:**
+```bash
+# Set a financial goal
+python sanitize.py --query-db finances.db --set-goal "Emergency Fund" savings 10000 2024-12-31
+python sanitize.py --query-db finances.db --set-goal "Pay off Discover" debt_payoff 5000 2024-06-30
+
+# View all goals with progress
+python sanitize.py --query-db finances.db --show-goals
+```
+
+**Cash Flow Forecasting:**
+```bash
+# Quick forecast (6 months)
+python sanitize.py --query-db finances.db --cash-flow-forecast
+
+# Detailed forecast (12 months)
+python sanitize.py --query-db finances.db --cash-flow-forecast 12
+
+# Detailed projection with running balance
+python sanitize.py --query-db finances.db --project-cash-flow 12
+```
+
+**Tax Preparation:**
+```bash
+# Show tax summary for 2024
+python sanitize.py --query-db finances.db --tax-summary 2024
+
+# Show tax-deductible expenses
+python sanitize.py --query-db finances.db --tax-deductions 2024
+
+# Export comprehensive tax report
+python sanitize.py --query-db finances.db --export-tax-report tax_report_2024.txt
+```
+
 **Note:** The old `src/main.py` entry point still works but is deprecated. Use `sanitize.py` for the enhanced CLI experience.
 
 ## Quick Start for NotebookLM
@@ -407,9 +484,25 @@ Once uploaded, try these prompts:
 - "Which merchants appear on multiple credit cards?"
 
 **Tax Preparation:**
-- "Identify all tax-deductible expenses"
-- "What were my total business expenses?"
-- "Categorize expenses for tax filing"
+- "What's my total income for 2024 from all sources?"
+- "Show me all my tax-deductible expenses"
+- "Help me fill out Schedule A (Itemized Deductions)"
+- "What were my capital gains or losses?"
+- "Calculate my adjusted gross income (AGI)"
+- See [TAX_PREPARATION_GUIDE.md](TAX_PREPARATION_GUIDE.md) for detailed tax preparation instructions
+
+**Budget & Goals:**
+- "Am I staying within my budget this month?"
+- "Which categories am I overspending in?"
+- "What's my progress toward my financial goals?"
+- "How much do I need to save each month to reach my goal?"
+- "Show me my budget vs actual spending for each category"
+
+**Cash Flow Planning:**
+- "What will my cash flow look like over the next 6 months?"
+- "Are there any months where I'll have negative cash flow?"
+- "What's my projected account balance in 3 months?"
+- "Help me plan for seasonal spending variations"
 
 ### Pro Tips for NotebookLM
 
