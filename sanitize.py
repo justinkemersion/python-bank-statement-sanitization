@@ -16,7 +16,7 @@ from src.models.sanitizer import Sanitizer
 from src.models.pdf_handler import PDFHandler
 from src.models.txt_handler import TXTHandler
 from src.models.metadata import MetadataGenerator
-from src.views.cli import CLIView, MessageLevel
+from src.views.cli import CLIView, MessageLevel, Colors
 
 
 def parse_arguments():
@@ -245,17 +245,31 @@ def main():
     # Print configuration
     include_metadata = not args.no_metadata
     if not cli.quiet:
-        cli.print_header("Bank Statement Sanitizer")
-        cli.print(f"Input directory:  {input_directory}", MessageLevel.INFO)
-        cli.print(f"Output directory: {output_directory}", MessageLevel.INFO)
+        cli.print_banner()
+        print()
+        # Configuration table
+        config_items = [
+            ("Input Directory", input_directory),
+            ("Output Directory", output_directory),
+        ]
+        
         if include_metadata:
-            cli.print(f"AI metadata:      Enabled (for AI tool compatibility)", MessageLevel.INFO)
+            config_items.append(("AI Metadata", "Enabled (AI tool compatible)"))
         else:
-            cli.print(f"AI metadata:      Disabled", MessageLevel.INFO)
+            config_items.append(("AI Metadata", "Disabled"))
+            
         if cli.verbose:
-            cli.print(f"Verbose mode:     Enabled", MessageLevel.DEBUG)
+            config_items.append(("Verbose Mode", "Enabled"))
         if cli.dry_run:
-            cli.print(f"Dry run mode:     Enabled", MessageLevel.WARNING)
+            config_items.append(("Dry Run Mode", "Enabled"))
+        
+        # Print configuration in a clean format
+        max_label_len = max(len(label) for label, _ in config_items)
+        for label, value in config_items:
+            label_text = cli._colorize(f"{label:.<{max_label_len}}", Colors.DIM)
+            value_text = cli._colorize(value, Colors.BRIGHT_CYAN)
+            print(f"  {label_text} {value_text}")
+        print()
     
     # Run sanitization
     try:
