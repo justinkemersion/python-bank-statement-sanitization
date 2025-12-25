@@ -324,4 +324,164 @@ class DatabaseExporter:
         stats['files_imported'] = cursor.fetchone()[0]
         
         return stats
+    
+    def export_to_csv(self, output_path: str, include_metadata: bool = True) -> bool:
+        """Export all transactions to a CSV file for AI analysis (NotebookLM, etc.).
+        
+        Args:
+            output_path: Path where the CSV file should be saved
+            include_metadata: Whether to include metadata header explaining the data
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT 
+                    transaction_date,
+                    amount,
+                    description,
+                    category,
+                    transaction_type,
+                    source_file,
+                    reference_number,
+                    notes
+                FROM transactions
+                ORDER BY transaction_date, id
+            """)
+            
+            rows = cursor.fetchall()
+            
+            import csv
+            with open(output_path, 'w', encoding='utf-8', newline='') as f:
+                if include_metadata:
+                    # Write comprehensive metadata header
+                    metadata = f"""# COMPREHENSIVE FINANCIAL TRANSACTION DATA
+# This file contains all sanitized financial transactions from your bank statements.
+# Safe for AI analysis tools like NotebookLM, ChatGPT, Claude, etc.
+#
+# DATA PERIOD: {self.get_statistics().get('date_range', {}).get('min', 'Unknown')} to {self.get_statistics().get('date_range', {}).get('max', 'Unknown')}
+# TOTAL TRANSACTIONS: {self.get_statistics().get('total_transactions', 0)}
+# FILES PROCESSED: {self.get_statistics().get('files_imported', 0)}
+#
+# COLUMNS:
+#   - transaction_date: Date of the transaction
+#   - amount: Transaction amount (negative for debits, positive for credits)
+#   - description: Transaction description (sanitized - sensitive data removed)
+#   - category: Transaction category (if available)
+#   - transaction_type: 'debit' or 'credit'
+#   - source_file: Original statement file name
+#   - reference_number: Transaction reference number (if available)
+#   - notes: Additional notes
+#
+# NOTE: All sensitive information (account numbers, SSN, etc.) has been redacted.
+# The [REDACTED] placeholders indicate where sensitive data was removed.
+#
+"""
+                    f.write(metadata)
+                    f.write("\n")
+                
+                # Write CSV data
+                fieldnames = ['transaction_date', 'amount', 'description', 'category', 
+                            'transaction_type', 'source_file', 'reference_number', 'notes']
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                for row in rows:
+                    writer.writerow({
+                        'transaction_date': row[0] or '',
+                        'amount': row[1] if row[1] is not None else '',
+                        'description': row[2] or '',
+                        'category': row[3] or '',
+                        'transaction_type': row[4] or '',
+                        'source_file': row[5] or '',
+                        'reference_number': row[6] or '',
+                        'notes': row[7] or ''
+                    })
+            
+            return True
+        except Exception as e:
+            print(f"Error exporting to CSV: {e}")
+            return False
+    
+    def export_summary_report(self, output_path: str) -> bool:
+        """Export a human-readable summary report for AI analysis.
+        
+        Args:
+            output_path: Path where the report should be saved
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            cursor = self.conn.cursor()
+            stats = self.get_statistics()
+            
+            # Get monthly breakdown
+            cursor.execute("""
+                SELECT 
+                    strftime('%Y-%m', transaction_date) as month,
+                    COUNT(*) as count,
+                    SUM(amount) as total
+                FROM transactions
+                WHERE transaction_date IS NOT NULL
+                GROUP BY month
+                ORDER BY month
+            """)
+            monthly_data = cursor.fetchall()
+            
+            # Get top spending categories (if categories exist)
+            cursor.execute("""
+                SELECT 
+                    category,
+                    COUNT(*) as count,
+                    SUM(amount) as total
+                FROM transactions
+                WHERE category IS NOT NULL AND category != ''
+                GROUP BY category
+                ORDER BY ABS(total) DESC
+                LIMIT 20
+            """)
+            category_data = cursor.fetchall()
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write("=" * 80 + "\n")
+                f.write("FINANCIAL TRANSACTION SUMMARY REPORT\n")
+                f.write("Safe for AI Analysis (NotebookLM, ChatGPT, Claude, etc.)\n")
+                f.write("=" * 80 + "\n\n")
+                
+                f.write("OVERVIEW\n")
+                f.write("-" * 80 + "\n")
+                f.write(f"Total Transactions: {stats['total_transactions']}\n")
+                f.write(f"Files Processed: {stats['files_imported']}\n")
+                if stats['date_range']['min']:
+                    f.write(f"Date Range: {stats['date_range']['min']} to {stats['date_range']['max']}\n")
+                if stats['total_amount']:
+                    f.write(f"Total Amount: ${stats['total_amount']:,.2f}\n")
+                f.write("\n")
+                
+                if monthly_data:
+                    f.write("MONTHLY BREAKDOWN\n")
+                    f.write("-" * 80 + "\n")
+                    for month, count, total in monthly_data:
+                        f.write(f"{month}: {count} transactions, Total: ${total:,.2f}\n")
+                    f.write("\n")
+                
+                if category_data:
+                    f.write("TOP SPENDING CATEGORIES\n")
+                    f.write("-" * 80 + "\n")
+                    for category, count, total in category_data:
+                        f.write(f"{category}: {count} transactions, Total: ${total:,.2f}\n")
+                    f.write("\n")
+                
+                f.write("=" * 80 + "\n")
+                f.write("NOTE: All sensitive information has been redacted from this data.\n")
+                f.write("This report is safe to share with AI tools for analysis.\n")
+                f.write("=" * 80 + "\n")
+            
+            return True
+        except Exception as e:
+            print(f"Error creating summary report: {e}")
+            return False
 

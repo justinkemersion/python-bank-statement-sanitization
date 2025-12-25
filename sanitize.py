@@ -93,6 +93,18 @@ Examples:
     )
     
     parser.add_argument(
+        "--export-csv",
+        dest="export_csv",
+        help="Export database to CSV file for AI analysis (requires --export-db)"
+    )
+    
+    parser.add_argument(
+        "--export-report",
+        dest="export_report",
+        help="Export database to summary report text file for AI analysis (requires --export-db)"
+    )
+    
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 1.0.0"
@@ -621,6 +633,25 @@ def main():
                 cli.print(f"Date Range: {stats['date_range']['min']} to {stats['date_range']['max']}", MessageLevel.INFO)
             if stats['total_amount']:
                 cli.print(f"Total Amount: ${stats['total_amount']:,.2f}", MessageLevel.INFO)
+            
+            # Export to CSV if requested
+            if args.export_csv:
+                csv_path = os.path.abspath(args.export_csv)
+                if db_exporter.export_to_csv(csv_path):
+                    cli.print(f"\n✓ Exported transactions to CSV: {csv_path}", MessageLevel.SUCCESS)
+                    cli.print("  This file is ready to upload to NotebookLM for analysis.", MessageLevel.INFO)
+                else:
+                    cli.print(f"✗ Failed to export CSV", MessageLevel.ERROR)
+            
+            # Export summary report if requested
+            if args.export_report:
+                report_path = os.path.abspath(args.export_report)
+                if db_exporter.export_summary_report(report_path):
+                    cli.print(f"\n✓ Exported summary report: {report_path}", MessageLevel.SUCCESS)
+                    cli.print("  This report is ready to upload to NotebookLM for analysis.", MessageLevel.INFO)
+                else:
+                    cli.print(f"✗ Failed to export report", MessageLevel.ERROR)
+            
             db_exporter.close()
         
         # Exit with appropriate code
