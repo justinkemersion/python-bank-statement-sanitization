@@ -97,15 +97,36 @@ myenv\Scripts\activate     # Windows
 
 **Run the sanitizer:**
 ```bash
-python src/main.py <input_directory> [-o <output_directory>]
+python sanitize.py <input_directory> [options]
 ```
 
-**Example:**
+**Basic Examples:**
 ```bash
-python src/main.py test_data -o sanitized_output
+# Sanitize files in a directory (output to same directory)
+python sanitize.py ./statements
+
+# Specify output directory
+python sanitize.py ./statements -o ./sanitized
+
+# Verbose mode with detailed output
+python sanitize.py ./statements --verbose
+
+# Quiet mode (only errors)
+python sanitize.py ./statements --quiet
+
+# Dry run (see what would be done without modifying files)
+python sanitize.py ./statements --dry-run
 ```
 
-If no output directory is specified, sanitized files will be saved in the input directory.
+**Command-Line Options:**
+- `-o, --output-dir`: Output directory for sanitized files (default: same as input directory)
+- `-v, --verbose`: Enable verbose output with detailed processing information
+- `-q, --quiet`: Suppress all output except errors
+- `--dry-run`: Show what would be done without actually modifying files
+- `--version`: Show version information
+- `-h, --help`: Show help message
+
+**Note:** The old `src/main.py` entry point still works but is deprecated. Use `sanitize.py` for the enhanced CLI experience.
 
 ### Development
 
