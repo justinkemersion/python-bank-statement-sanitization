@@ -444,9 +444,22 @@ def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_
                             if cli.verbose:
                                 cli.print(f"  Removed {deleted} existing transactions for re-import", MessageLevel.DEBUG)
                         
-                        # Try to extract paystub data first (for PDF/TXT files)
-                        paystubs = []
+                        # Try to extract tax documents first (for PDF/TXT files)
+                        tax_doc = None
                         if ext.lower() in ['.pdf', '.txt']:
+                            tax_doc = db_exporter.extract_tax_document_from_text(sanitized_text, os.path.basename(file_path))
+                            if tax_doc:
+                                doc_id = db_exporter.insert_tax_document(tax_doc, skip_duplicates=True)
+                                if doc_id:
+                                    if cli.verbose:
+                                        doc_type = tax_doc.get('document_type', 'Unknown')
+                                        tax_year = tax_doc.get('tax_year', 'N/A')
+                                        cli.print(f"  Extracted tax document: {doc_type} ({tax_year})", MessageLevel.DEBUG)
+                                    db_exporter.record_file_import(file_path, 'tax_document', 1, f"Tax document: {tax_doc.get('document_type')}")
+                        
+                        # Try to extract paystub data (for PDF/TXT files, if not a tax document)
+                        paystubs = []
+                        if not tax_doc and ext.lower() in ['.pdf', '.txt']:
                             paystubs = db_exporter.extract_paystub_from_text(sanitized_text, os.path.basename(file_path))
                             if paystubs:
                                 inserted_count = 0
@@ -470,8 +483,8 @@ def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_
                                     if cli.verbose:
                                         cli.print(f"  All {len(paystubs)} paystub(s) already exist in database", MessageLevel.DEBUG)
                         
-                        # Extract investment account data first (for statements, not paystubs)
-                        if not paystubs and ext.lower() in ['.pdf', '.txt']:
+                        # Extract investment account data (for statements, not paystubs or tax docs)
+                        if not paystubs and not tax_doc and ext.lower() in ['.pdf', '.txt']:
                             # Detect account type and bank name first
                             account_type = db_exporter._detect_account_type(sanitized_text, os.path.basename(file_path))
                             bank_name = db_exporter._detect_bank_name(sanitized_text, os.path.basename(file_path))
@@ -504,8 +517,8 @@ def sanitize_single_file(file_path: str, output_dir: str, cli: CLIView, include_
                                                 balance_info += f", Min Payment: ${balance.get('minimum_payment', 0):,.2f}"
                                             cli.print(f"  Extracted account balance: {balance_info}", MessageLevel.DEBUG)
                         
-                        # Extract transactions (skip if this was a paystub or investment account)
-                        if not paystubs and not investment_data:
+                        # Extract transactions (skip if this was a paystub, tax doc, or investment account)
+                        if not paystubs and not tax_doc and not investment_data:
                             if ext.lower() == '.csv':
                                 transactions = db_exporter.extract_transactions_from_csv(sanitized_rows, os.path.basename(file_path))
                             elif ext.lower() in ['.xlsx', '.xls']:
@@ -776,8 +789,8 @@ def sanitize_files(input_dir: str, output_dir: str, cli: CLIView, include_metada
                                                     balance_info += f", Min Payment: ${balance.get('minimum_payment', 0):,.2f}"
                                                 cli.print(f"  Extracted account balance: {balance_info}", MessageLevel.DEBUG)
                             
-                            # Extract transactions (skip if this was a paystub or investment account)
-                            if not paystubs and not investment_data:
+                            # Extract transactions (skip if this was a paystub, tax doc, or investment account)
+                            if not paystubs and not tax_doc and not investment_data:
                                 if ext.lower() == '.csv':
                                     transactions = db_exporter.extract_transactions_from_csv(sanitized_rows, os.path.basename(file_path))
                                 elif ext.lower() in ['.xlsx', '.xls']:
@@ -1146,7 +1159,7 @@ def main():
     cli = CLIView(verbose=args.verbose, quiet=args.quiet, dry_run=args.dry_run)
     
     # Handle query mode (if --query-db is specified)
-    if args.query_db or args.list_recurring or args.spending_report or args.top_categories or args.top_merchants or args.debt_payoff or args.show_debts or args.show_bills or args.upcoming_bills or args.show_investments or args.show_holdings or args.show_income or args.income_trends or args.validate_data or args.check_duplicates:
+    if args.query_db or args.list_recurring or args.spending_report or args.top_categories or args.top_merchants or args.debt_payoff or args.show_debts or args.show_bills or args.upcoming_bills or args.show_investments or args.show_holdings or args.show_income or args.income_trends or args.validate_data or args.check_duplicates or args.tax_summary is not None or args.tax_deductions is not None or args.export_tax_report:
         handle_query_mode(args, cli)
         sys.exit(0)
     

@@ -15,6 +15,7 @@ from src.models.merchant_extractor import MerchantExtractor
 from src.models.paystub_extractor import PaystubExtractor
 from src.models.balance_extractor import BalanceExtractor
 from src.models.investment_extractor import InvestmentExtractor
+from src.models.tax_extractor import TaxDocumentExtractor
 
 
 class DatabaseExporter:
@@ -33,6 +34,7 @@ class DatabaseExporter:
         self.paystub_extractor = PaystubExtractor()
         self.balance_extractor = BalanceExtractor()
         self.investment_extractor = InvestmentExtractor()
+        self.tax_extractor = TaxDocumentExtractor()
         self.paystub_extractor = PaystubExtractor()
     
     def connect(self):
@@ -268,6 +270,37 @@ class DatabaseExporter:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_inv_trans_type ON investment_transactions(transaction_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_inv_trans_date ON investment_transactions(transaction_date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_inv_trans_ticker ON investment_transactions(security_ticker)")
+        
+        # Tax documents table - track tax forms (1099-INT, 1099-DIV, 1099-B, W-2)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tax_documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_file TEXT NOT NULL,
+                document_type TEXT NOT NULL,
+                tax_year INTEGER,
+                payer_name TEXT,
+                employer_name TEXT,
+                interest_income REAL,
+                ordinary_dividends REAL,
+                qualified_dividends REAL,
+                total_capital_gain REAL,
+                proceeds REAL,
+                cost_basis REAL,
+                gain_loss REAL,
+                wages REAL,
+                federal_tax_withheld REAL,
+                social_security_wages REAL,
+                social_security_tax REAL,
+                medicare_wages REAL,
+                medicare_tax REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tax_doc_type ON tax_documents(document_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tax_doc_year ON tax_documents(tax_year)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tax_doc_source ON tax_documents(source_file)")
         
         self.conn.commit()
     
